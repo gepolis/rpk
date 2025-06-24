@@ -2,42 +2,70 @@ import sys
 import json
 import socket
 import threading
+from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QListWidget, QLabel,
-    QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit, QMessageBox
+    QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit,
+    QMessageBox, QFrame, QTabWidget, QPushButton
 )
 from PySide6.QtCore import Qt
 
-
-CONFIG_PATH = "formats.json"
+CONFIG_PATH = Path("rp_config.json")
+FORMATS_PATH = "formats.json"
 PHRASES_PATH = "phrases.json"
-SERVER_IP = "127.0.0.1"
-SERVER_PORT = 12345
 
+DEFAULT_CONFIG = {
+    "org": "Полиция",
+    "rang": "Офицер",
+    "name": "Анна",
+    "server_ip": "127.0.0.1",
+    "server_port": 12345
+}
+
+ACCESS_CODE = "6329"
 
 class RPClient(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RP Client 2025 — PySide6 Modern UI")
-        self.resize(1000, 650)
+        self.setWindowTitle("RP Client 2025 — Клиент для RP")
+        self.resize(900, 600)
+
+        self.load_config()
         self.load_formats()
         self.load_phrases()
 
-        # Настройки пользователя (для замены переменных)
-        self.user_settings = {
-            "org": "Полиция",
-            "rang": "Офицер",
-            "name": "Анна"
-        }
-
         self.sock = None
         self.flat_subcat_map = {}
+
         self.init_ui()
         self.connect_to_server()
 
+    def load_config(self):
+        if not CONFIG_PATH.exists():
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_CONFIG, f, indent=4, ensure_ascii=False)
+            self.config = DEFAULT_CONFIG.copy()
+            print("[INFO] Создан новый конфиг с настройками по умолчанию")
+        else:
+            try:
+                with open(CONFIG_PATH, encoding="utf-8") as f:
+                    self.config = json.load(f)
+                print("[INFO] Конфиг загружен")
+            except Exception as e:
+                print("[ERROR] Ошибка загрузки конфига:", e)
+                self.config = DEFAULT_CONFIG.copy()
+
+    def save_config(self):
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(self.config, f, indent=4, ensure_ascii=False)
+            print("[INFO] Конфиг сохранён")
+        except Exception as e:
+            print("[ERROR] Ошибка сохранения конфига:", e)
+
     def load_formats(self):
         try:
-            with open(CONFIG_PATH, encoding="utf-8") as f:
+            with open(FORMATS_PATH, encoding="utf-8") as f:
                 self.formats = json.load(f)
             print("[INFO] Форматы загружены")
         except Exception as e:
@@ -55,73 +83,157 @@ class RPClient(QWidget):
 
     def init_ui(self):
         main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(10)
 
-        # Настройки (организация, звание, имя)
-        settings_layout = QHBoxLayout()
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        # --- Вкладка Основные настройки ---
+        self.tab_main = QWidget()
+        main_layout_main = QVBoxLayout(self.tab_main)
+        main_layout_main.setContentsMargins(10, 10, 10, 10)
+        main_layout_main.setSpacing(15)
+
+        # Организация
+        org_layout = QHBoxLayout()
+        org_label = QLabel("Организация:")
+        org_label.setFixedWidth(90)
         self.org_combo = QComboBox()
         self.org_combo.addItems([
             "Полиция", "ДПС", "ФСБ", "ФСО", "ФСИН", "ФССП", "Кошко-полиция"
         ])
-        self.org_combo.setCurrentText(self.user_settings["org"])
-        self.org_combo.currentTextChanged.connect(lambda v: self.update_setting("org", v))
+        self.org_combo.setCurrentText(self.config.get("org", DEFAULT_CONFIG["org"]))
+        self.org_combo.currentTextChanged.connect(lambda v: self.on_setting_changed("org", v))
+        org_layout.addWidget(org_label)
+        org_layout.addWidget(self.org_combo)
+        main_layout_main.addLayout(org_layout)
 
+        # Звание (Ранг)
+        rang_layout = QHBoxLayout()
+        rang_label = QLabel("Звание:")
+        rang_label.setFixedWidth(90)
         self.rang_combo = QComboBox()
         self.rang_combo.addItems([
             "Офицер", "Сержант", "Лейтенант", "Капитан", "Майор",
             "Подполковник", "Полковник", "Рядовой", "Старший лейтенант"
         ])
-        self.rang_combo.setCurrentText(self.user_settings["rang"])
-        self.rang_combo.currentTextChanged.connect(lambda v: self.update_setting("rang", v))
+        self.rang_combo.setCurrentText(self.config.get("rang", DEFAULT_CONFIG["rang"]))
+        self.rang_combo.currentTextChanged.connect(lambda v: self.on_setting_changed("rang", v))
+        rang_layout.addWidget(rang_label)
+        rang_layout.addWidget(self.rang_combo)
+        main_layout_main.addLayout(rang_layout)
 
+        # Имя
+        name_layout = QHBoxLayout()
+        name_label = QLabel("Имя:")
+        name_label.setFixedWidth(90)
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("Имя")
-        self.name_edit.setText(self.user_settings["name"])
-        self.name_edit.textChanged.connect(lambda v: self.update_setting("name", v))
+        self.name_edit.setPlaceholderText("Ваше имя")
+        self.name_edit.setText(self.config.get("name", DEFAULT_CONFIG["name"]))
+        self.name_edit.textChanged.connect(lambda v: self.on_setting_changed("name", v))
+        name_layout.addWidget(name_label)
+        name_layout.addWidget(self.name_edit)
+        main_layout_main.addLayout(name_layout)
 
-        settings_layout.addWidget(QLabel("Организация:"))
-        settings_layout.addWidget(self.org_combo)
-        settings_layout.addWidget(QLabel("Звание:"))
-        settings_layout.addWidget(self.rang_combo)
-        settings_layout.addWidget(QLabel("Имя:"))
-        settings_layout.addWidget(self.name_edit)
+        # Добавим небольшой stretch
+        main_layout_main.addStretch()
 
-        main_layout.addLayout(settings_layout)
+        # --- Вкладка Настройки сервера ---
+        self.tab_server = QWidget()
+        main_layout_server = QVBoxLayout(self.tab_server)
+        main_layout_server.setContentsMargins(10, 10, 10, 10)
+        main_layout_server.setSpacing(15)
 
-        # Основной рабочий блок с 3 списками
+        # Инструкция по доступу
+        self.access_label = QLabel("Введите код доступа для изменения настроек сервера:")
+        self.access_label.setWordWrap(True)
+        main_layout_server.addWidget(self.access_label)
+
+        # Поле для ввода кода доступа
+        self.access_code_edit = QLineEdit()
+        self.access_code_edit.setEchoMode(QLineEdit.Password)
+        self.access_code_edit.setPlaceholderText("Код доступа")
+        self.access_code_edit.textChanged.connect(self.check_access_code)
+        main_layout_server.addWidget(self.access_code_edit)
+
+        # Контейнер с настройками сервера, скрыт по умолчанию
+        self.server_settings_container = QWidget()
+        server_settings_layout = QVBoxLayout(self.server_settings_container)
+        server_settings_layout.setContentsMargins(0, 0, 0, 0)
+        server_settings_layout.setSpacing(12)
+
+        # IP сервера
+        server_ip_layout = QHBoxLayout()
+        server_ip_label = QLabel("IP сервера:")
+        server_ip_label.setFixedWidth(90)
+        self.server_ip_edit = QLineEdit()
+        self.server_ip_edit.setText(self.config.get("server_ip", DEFAULT_CONFIG["server_ip"]))
+        self.server_ip_edit.textChanged.connect(lambda v: self.on_setting_changed("server_ip", v))
+        server_ip_layout.addWidget(server_ip_label)
+        server_ip_layout.addWidget(self.server_ip_edit)
+        server_settings_layout.addLayout(server_ip_layout)
+
+        # Порт сервера
+        server_port_layout = QHBoxLayout()
+        server_port_label = QLabel("Порт сервера:")
+        server_port_label.setFixedWidth(90)
+        self.server_port_edit = QLineEdit()
+        self.server_port_edit.setText(str(self.config.get("server_port", DEFAULT_CONFIG["server_port"])))
+        self.server_port_edit.textChanged.connect(lambda v: self.on_setting_changed("server_port", v))
+        server_port_layout.addWidget(server_port_label)
+        server_port_layout.addWidget(self.server_port_edit)
+        server_settings_layout.addLayout(server_port_layout)
+
+        main_layout_server.addWidget(self.server_settings_container)
+        self.server_settings_container.setVisible(False)
+
+        # --- Основной рабочий UI с фразами ---
+        self.phrases_tab = QWidget()
+        phrases_layout = QVBoxLayout(self.phrases_tab)
+        phrases_layout.setContentsMargins(10, 10, 10, 10)
+        phrases_layout.setSpacing(10)
+
         lists_layout = QHBoxLayout()
+        lists_layout.setSpacing(10)
 
         # Категории
         self.cat_list = QListWidget()
         self.cat_list.addItems(self.phrases.keys())
         self.cat_list.currentItemChanged.connect(self.on_category_changed)
-        lists_layout.addWidget(self.create_group_widget("Категории", self.cat_list))
+        lists_layout.addWidget(self.create_group_widget("Категории", self.cat_list), 1)
 
-        # Подкатегории + Подподкатегории
+        # Подкатегории / подподкатегории
         self.subcat_list = QListWidget()
         self.subcat_list.currentItemChanged.connect(self.on_subcategory_changed)
-        lists_layout.addWidget(self.create_group_widget("Подкатегории / Подподкатегории", self.subcat_list))
+        lists_layout.addWidget(self.create_group_widget("Подкатегории / Подподкатегории", self.subcat_list), 1)
 
         # Фразы
         self.phrase_list = QListWidget()
         self.phrase_list.itemDoubleClicked.connect(self.on_phrase_double_clicked)
-        lists_layout.addWidget(self.create_group_widget("Фразы (двойной клик для отправки)", self.phrase_list))
+        lists_layout.addWidget(self.create_group_widget("Фразы (двойной клик для отправки)", self.phrase_list), 2)
 
-        main_layout.addLayout(lists_layout)
+        phrases_layout.addLayout(lists_layout)
 
-        # Загрузка первой категории по умолчанию
+        self.tabs.addTab(self.phrases_tab, "Фразы")
+        self.tabs.addTab(self.tab_main, "Настройки")
+        self.tabs.addTab(self.tab_server, "Сервер")
+
+        # Загрузить первую категорию
         if self.phrases:
-            first_cat = list(self.phrases.keys())[0]
             self.cat_list.setCurrentRow(0)
+            first_cat = list(self.phrases.keys())[0]
             self.load_subcategories(first_cat)
 
-        # Применяем стиль
         self.apply_styles()
 
     def create_group_widget(self, title, widget):
         container = QWidget()
         layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
         label = QLabel(title)
-        label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 6px;")
+        label.setStyleSheet("font-weight: 600; font-size: 14px; color: #333333;")
         layout.addWidget(label)
         layout.addWidget(widget)
         return container
@@ -129,37 +241,65 @@ class RPClient(QWidget):
     def apply_styles(self):
         self.setStyleSheet("""
             QWidget {
-                background-color: #121212;
-                color: #e0e0e0;
+                background-color: #fdfdfd;
+                color: #222222;
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 14px;
             }
             QListWidget {
-                background-color: #1e1e1e;
-                border: 1px solid #444;
+                background-color: #ffffff;
+                border: 1px solid #ccc;
                 padding: 4px;
-                font-size: 13px;
             }
             QListWidget::item:selected {
-                background-color: #3a86ff;
+                background-color: #1976d2;
                 color: white;
             }
             QComboBox, QLineEdit {
-                background-color: #1e1e1e;
-                border: 1px solid #444;
-                padding: 4px 6px;
-                color: #e0e0e0;
-                font-size: 13px;
-                border-radius: 4px;
+                background-color: white;
+                border: 1px solid #ccc;
+                padding: 6px 8px;
+                border-radius: 5px;
+                font-size: 14px;
+                color: #222222;
                 min-width: 120px;
             }
+            QComboBox:hover, QLineEdit:hover {
+                border-color: #1976d2;
+            }
             QLabel {
-                color: #aaa;
+                color: #555555;
             }
         """)
 
-    def update_setting(self, key, value):
-        self.user_settings[key] = value
+    def check_access_code(self, text):
+        if text == ACCESS_CODE:
+            self.server_settings_container.setVisible(True)
+            self.access_code_edit.setEnabled(False)
+            self.access_label.setText("Доступ предоставлен. Вы можете изменить настройки сервера.")
+        else:
+            self.server_settings_container.setVisible(False)
+            self.access_label.setText("Введите код доступа для изменения настроек сервера:")
+
+    def on_setting_changed(self, key, value):
+        if key == "server_port":
+            try:
+                value = int(value)
+            except:
+                return
+        self.config[key] = value
+        self.save_config()
         print(f"[INFO] Настройка {key} изменена: {value}")
+
+        # При изменении ip/порта переподключаемся к серверу
+        if key in ("server_ip", "server_port"):
+            if self.sock:
+                try:
+                    self.sock.close()
+                except:
+                    pass
+                self.sock = None
+            self.connect_to_server()
 
     def on_category_changed(self, current, previous):
         if current:
@@ -169,25 +309,25 @@ class RPClient(QWidget):
 
     def load_subcategories(self, category):
         self.subcat_list.clear()
-        subcats = self.phrases.get(category, {})
         self.flat_subcat_map.clear()
 
         def recurse_subcats(d, prefix=""):
             for k, v in d.items():
                 if isinstance(v, dict):
-                    # Проверяем, если это подкатегория с фразами
+                    # Если есть вложенные словари — добавляем как подкатегорию
+                    # Если подкатегория содержит списки (фразы) — добавляем её, иначе идём глубже
                     if any(isinstance(val, list) for val in v.values()):
                         label = prefix + k
                         self.flat_subcat_map[label] = v
                         self.subcat_list.addItem(label)
                     else:
-                        # Вложенная подподкатегория
                         recurse_subcats(v, prefix + k + " > ")
                 elif isinstance(v, list):
                     label = prefix + k
                     self.flat_subcat_map[label] = v
                     self.subcat_list.addItem(label)
 
+        subcats = self.phrases.get(category, {})
         recurse_subcats(subcats)
 
     def on_subcategory_changed(self, current, previous):
@@ -200,7 +340,6 @@ class RPClient(QWidget):
             return
         phrases = []
         if isinstance(data, dict):
-            # Собираем все списки фраз из ключей
             for val in data.values():
                 if isinstance(val, list):
                     phrases.extend(val)
@@ -236,15 +375,17 @@ class RPClient(QWidget):
         return prefix, suffix
 
     def apply_variables(self, text):
-        for key, val in self.user_settings.items():
-            text = text.replace("{" + key + "}", val)
+        for key, val in self.config.items():
+            text = text.replace("{" + key + "}", str(val))
         return text
 
     def connect_to_server(self):
         try:
+            if self.sock:
+                self.sock.close()
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect((SERVER_IP, SERVER_PORT))
-            print(f"[INFO] Подключено к серверу {SERVER_IP}:{SERVER_PORT}")
+            self.sock.connect((self.config["server_ip"], self.config["server_port"]))
+            print(f"[INFO] Подключено к серверу {self.config['server_ip']}:{self.config['server_port']}")
             self.sock.sendall(b"CLIENT_WITH_UI\n")
             threading.Thread(target=self.receive_loop, daemon=True).start()
         except Exception as e:
@@ -253,29 +394,23 @@ class RPClient(QWidget):
     def send_to_server(self, message: str):
         if self.sock:
             try:
-                self.sock.sendall(message.encode("utf-8") + b"\n")
+                self.sock.sendall((message + "\n").encode("utf-8"))
             except Exception as e:
-                print(f"[ERROR] Ошибка отправки: {e}")
+                print("[ERROR] Ошибка отправки сообщения:", e)
 
     def receive_loop(self):
-        while True:
-            try:
-                data = self.sock.recv(4096)
+        try:
+            while True:
+                data = self.sock.recv(1024)
                 if not data:
-                    print("[INFO] Отключение от сервера")
                     break
-                print("[SERVER] " + data.decode("utf-8").strip())
-            except Exception as e:
-                print(f"[ERROR] Ошибка получения данных: {e}")
-                break
+                msg = data.decode("utf-8").strip()
+                print("[RECV]", msg)
+        except Exception as e:
+            print("[ERROR] Ошибка приема:", e)
 
-
-def main():
+if __name__ == "__main__":
     app = QApplication(sys.argv)
     client = RPClient()
     client.show()
     sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()
