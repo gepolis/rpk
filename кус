@@ -1,0 +1,383 @@
+import sys
+import socket
+import json
+import os
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QListWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QTextEdit, QTabWidget, QComboBox, QFormLayout, QLineEdit,
+    QSpacerItem, QSizePolicy
+)
+from PySide6.QtCore import Qt, Slot
+
+CONFIG_PATH = "rp_config.json"
+PHRASES_PATH = "rp_phrases.json"
+FORMATS_PATH = "formats.json"
+SERVER_IP = "109.73.204.176"
+SERVER_PORT = 12345
+
+ORGANIZATIONS = {
+    "Полиция": [
+        "Офицер", "Сержант", "Лейтенант", "Капитан", "Майор", "Подполковник", "Полковник", "Генерал"
+    ],
+    "ДПС": [
+        "Инспектор", "Старший инспектор", "Начальник отделения", "Заместитель начальника", "Начальник отдела"
+    ],
+    "ФСБ": [
+        "Младший лейтенант", "Лейтенант", "Старший лейтенант", "Капитан", "Майор", "Подполковник", "Полковник"
+    ],
+    "ФСО": [
+        "Офицер", "Старший офицер", "Подполковник", "Полковник"
+    ],
+    "ФСИН": [
+        "Комендант", "Начальник отдела", "Начальник службы", "Заместитель начальника"
+    ],
+    "ФССП": [
+        "Старший судебный пристав", "Судебный пристав-исполнитель", "Начальник отдела"
+    ],
+    "Кошко-Полиция": [
+        "Кошко-Офицер", "Кошко-Сержант", "Кошко-Лейтенант", "Кошко-Капитан", "Кошко-Майор"
+    ],
+    "Кошко-ДПС": [
+        "Кошко-Инспектор", "Кошко-Старший инспектор"
+    ],
+    "Кошко-ФСБ": [
+        "Кошко-Младший лейтенант", "Кошко-Капитан"
+    ],
+}
+
+DEFAULT_FORMATS = {
+    "Работа": {
+        "Остановка": {"prefix": "**", "suffix": "**"},
+        "Проверка": {"prefix": "**", "suffix": "**"},
+        "Задержание": {"prefix": "**", "suffix": "**"},
+        "Патруль": {"prefix": "**", "suffix": "**"},
+        "Сирена": {"prefix": "**", "suffix": "**"},
+        "Громкоговоритель": {"prefix": "", "suffix": ""},
+        "Документы": {"prefix": "**", "suffix": "**"},
+        "Опрос": {"prefix": "**", "suffix": "**"},
+        "Фразы": {"prefix": "", "suffix": ""}
+    },
+    "Рация": {
+        "Обычное": {"prefix": "Рация {org}: ", "suffix": ""},
+        "Поддержка": {"prefix": "Рация {org}: ", "suffix": ""},
+        "Погоня": {"prefix": "Рация {org}: ", "suffix": ""},
+        "Доклад": {"prefix": "Рация {org}: ", "suffix": ""},
+        "Запрос": {"prefix": "Рация {org}: ", "suffix": ""}
+    },
+    "Личная жизнь": {
+        "Обычное": {"prefix": "**", "suffix": "**"},
+        "Флирт": {"prefix": "**", "suffix": "**"}
+    },
+    "НонРП": {
+        "Фразы": {"prefix": "//", "suffix": ""}
+    }
+}
+
+
+class RPClient(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("RP Client 2025 - Отправка")
+        self.setMinimumSize(900, 600)
+        self.setStyleSheet(self.get_stylesheet())
+
+        self.config = self.load_config()
+        self.phrases = self.load_phrases()
+        self.formats = self.load_formats()
+
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        self.setup_ui()
+        self.connect_to_server()
+
+    def get_stylesheet(self):
+        return """
+            QWidget {
+                background-color: #f5f7fa;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 14px;
+                color: #333;
+            }
+            QListWidget {
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 4px;
+                background-color: white;
+            }
+            QListWidget::item:selected {
+                background-color: #4a90e2;
+                color: white;
+            }
+            QLabel {
+                font-weight: 600;
+                margin-bottom: 6px;
+            }
+            QTabWidget::pane {
+                border: none;
+            }
+            QTabBar::tab {
+                background: #e0e6ef;
+                border-radius: 6px;
+                padding: 8px 20px;
+                margin-right: 4px;
+                font-weight: 600;
+                color: #555;
+            }
+            QTabBar::tab:selected {
+                background: #4a90e2;
+                color: white;
+            }
+            QTextEdit {
+                background-color: #fafafa;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 6px;
+                font-family: monospace;
+                font-size: 13px;
+            }
+            QComboBox, QLineEdit {
+                padding: 6px;
+                border-radius: 6px;
+                border: 1px solid #ccc;
+                min-width: 120px;
+            }
+            QComboBox:hover, QLineEdit:hover {
+                border-color: #4a90e2;
+            }
+        """
+
+    def load_config(self):
+        if not os.path.exists(CONFIG_PATH):
+            config = {
+                "rang": "Офицер",
+                "org": "Полиция",
+                "name": "Имя",
+            }
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            return config
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def save_config(self):
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(self.config, f, indent=4, ensure_ascii=False)
+        self.log("[INFO] Настройки сохранены")
+
+    def load_phrases(self):
+        if not os.path.exists(PHRASES_PATH):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Ошибка", f"Файл {PHRASES_PATH} не найден!")
+            sys.exit(1)
+        with open(PHRASES_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def load_formats(self):
+        if not os.path.exists(FORMATS_PATH):
+            with open(FORMATS_PATH, "w", encoding="utf-8") as f:
+                json.dump(DEFAULT_FORMATS, f, indent=4, ensure_ascii=False)
+            return DEFAULT_FORMATS
+        with open(FORMATS_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def connect_to_server(self):
+        try:
+            self.sock.connect((SERVER_IP, SERVER_PORT))
+            self.sock.sendall(b"sender\n")
+            self.log(f"[INFO] Подключено к серверу {SERVER_IP}:{SERVER_PORT} как sender")
+        except Exception as e:
+            self.log(f"[ERROR] Не удалось подключиться к серверу: {e}")
+
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # Вкладка Фразы
+        phrases_widget = QWidget()
+        phrases_layout = QHBoxLayout(phrases_widget)
+
+        self.category_list = QListWidget()
+        self.category_list.addItems(self.phrases.keys())
+        self.category_list.currentTextChanged.connect(self.category_changed)
+        self.category_list.setFixedWidth(180)
+        phrases_layout.addWidget(self.category_list)
+
+        self.subcategory_list = QListWidget()
+        self.subcategory_list.currentTextChanged.connect(self.subcategory_changed)
+        self.subcategory_list.setFixedWidth(180)
+        phrases_layout.addWidget(self.subcategory_list)
+
+        right_layout = QVBoxLayout()
+
+        self.phrase_list = QListWidget()
+        self.phrase_list.itemDoubleClicked.connect(self.on_phrase_double_clicked)
+        right_layout.addWidget(self.phrase_list)
+
+        right_layout.addWidget(QLabel("Лог сообщений:"))
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFixedHeight(120)
+        right_layout.addWidget(self.log_text)
+
+        phrases_layout.addLayout(right_layout)
+
+        self.tabs.addTab(phrases_widget, "Фразы")
+
+        # Вкладка Настройки
+        settings_widget = QWidget()
+        settings_layout = QFormLayout(settings_widget)
+
+        self.org_combo = QComboBox()
+        self.org_combo.addItems(ORGANIZATIONS.keys())
+        self.org_combo.currentTextChanged.connect(self.on_org_changed)
+        settings_layout.addRow(QLabel("Организация:"), self.org_combo)
+
+        self.rang_combo = QComboBox()
+        settings_layout.addRow(QLabel("Звание:"), self.rang_combo)
+        self.rang_combo.currentTextChanged.connect(self.on_rang_changed)
+
+        self.name_edit = QLineEdit()
+        settings_layout.addRow(QLabel("Имя:"), self.name_edit)
+        self.name_edit.textChanged.connect(self.on_name_changed)
+
+        settings_layout.addItem(QSpacerItem(20, 200, QSizePolicy.Minimum, QSizePolicy.Expanding))
+
+        self.tabs.addTab(settings_widget, "Настройки")
+
+        # Установка значений из конфига
+        saved_org = self.config.get("org", "Полиция")
+        saved_rang = self.config.get("rang", "Офицер")
+        saved_name = self.config.get("name", "Имя")
+
+        self.org_combo.setCurrentText(saved_org)
+        self.update_rangs(saved_org)
+        if saved_rang in ORGANIZATIONS.get(saved_org, []):
+            self.rang_combo.setCurrentText(saved_rang)
+        else:
+            self.rang_combo.setCurrentIndex(0)
+
+        self.name_edit.setText(saved_name)
+
+        if self.phrases:
+            first_cat = list(self.phrases.keys())[0]
+            self.category_list.setCurrentRow(0)
+            self.update_subcategories(first_cat)
+
+    @Slot()
+    def category_changed(self, cat):
+        self.update_subcategories(cat)
+
+    def update_subcategories(self, cat):
+        self.subcategory_list.clear()
+        if cat in self.phrases:
+            self.subcategory_list.addItems(self.phrases[cat].keys())
+            first_sub = next(iter(self.phrases[cat].keys()), None)
+            if first_sub:
+                self.subcategory_list.setCurrentRow(0)
+                self.update_phrases(cat, first_sub)
+        else:
+            self.phrase_list.clear()
+
+    @Slot()
+    def subcategory_changed(self, subcat):
+        cat = self.category_list.currentItem().text() if self.category_list.currentItem() else None
+        if cat and subcat:
+            self.update_phrases(cat, subcat)
+        else:
+            self.phrase_list.clear()
+
+    def update_phrases(self, cat, subcat):
+        self.phrase_list.clear()
+        if not cat or not subcat:
+            return
+        data = self.phrases.get(cat, {}).get(subcat, {})
+        if isinstance(data, dict):
+            for key, phrases in data.items():
+                for phrase in phrases:
+                    label = f"[{key}] {phrase}" if key != "Фразы" else phrase
+                    self.phrase_list.addItem(label)
+        elif isinstance(data, list):
+            for phrase in data:
+                self.phrase_list.addItem(phrase)
+
+    def update_rangs(self, org):
+        self.rang_combo.clear()
+        rangs = ORGANIZATIONS.get(org, [])
+        self.rang_combo.addItems(rangs)
+
+    def send_phrase(self):
+        selected = self.phrase_list.currentItem()
+        if not selected:
+            return
+
+        raw_phrase = selected.text()
+        if raw_phrase.startswith("["):
+            raw_phrase = raw_phrase.split("] ", 1)[1]
+
+        cat = self.category_list.currentItem().text() if self.category_list.currentItem() else ""
+        subcat = self.subcategory_list.currentItem().text() if self.subcategory_list.currentItem() else ""
+
+        prefix = ""
+        suffix = ""
+
+        if cat in self.formats and subcat in self.formats[cat]:
+            fmt = self.formats[cat][subcat]
+            prefix = fmt.get("prefix", "")
+            suffix = fmt.get("suffix", "")
+
+        placeholders = {
+            "{org}": self.config.get("org", ""),
+            "{rang}": self.config.get("rang", ""),
+            "{name}": self.config.get("name", "")
+        }
+
+        for key, val in placeholders.items():
+            prefix = prefix.replace(key, val)
+            raw_phrase = raw_phrase.replace(key, val)
+            suffix = suffix.replace(key, val)
+
+        final_text = f"{prefix}{raw_phrase}{suffix}"
+
+        try:
+            self.sock.sendall(final_text.encode("utf-8"))
+            self.log(f"[Отправлено] {final_text}")
+        except Exception as e:
+            self.log(f"[ERROR] Не удалось отправить сообщение: {e}")
+
+    def on_org_changed(self, org_name):
+        self.config["org"] = org_name
+        self.save_config()
+        self.update_rangs(org_name)
+
+    def on_rang_changed(self, rang_name):
+        self.config["rang"] = rang_name
+        self.save_config()
+
+    def on_name_changed(self, text):
+        self.config["name"] = text
+        self.save_config()
+
+    @Slot()
+    def on_phrase_double_clicked(self, item):
+        self.phrase_list.setCurrentItem(item)
+        self.send_phrase()
+
+    def log(self, message):
+        self.log_text.append(message)
+        self.log_text.verticalScrollBar().setValue(self.log_text.verticalScrollBar().maximum())
+
+    def closeEvent(self, event):
+        try:
+            self.sock.close()
+        except:
+            pass
+        event.accept()
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    client = RPClient()
+    client.show()
+    sys.exit(app.exec())
