@@ -2,25 +2,28 @@ import sys
 import json
 import socket
 import threading
-from PyQt6.QtWidgets import (
-    QApplication, QWidget, QHBoxLayout, QVBoxLayout,
-    QListWidget, QLabel, QMessageBox, QComboBox, QLineEdit
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QListWidget, QLabel,
+    QVBoxLayout, QHBoxLayout, QComboBox, QLineEdit, QMessageBox
 )
-from PyQt6.QtCore import Qt
+from PySide6.QtCore import Qt
+
 
 CONFIG_PATH = "formats.json"
 PHRASES_PATH = "phrases.json"
 SERVER_IP = "127.0.0.1"
 SERVER_PORT = 12345
 
+
 class RPClient(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RP Client 2025")
-        self.resize(900, 600)
-
+        self.setWindowTitle("RP Client 2025 — PySide6 Modern UI")
+        self.resize(1000, 650)
         self.load_formats()
         self.load_phrases()
+
+        # Настройки пользователя (для замены переменных)
         self.user_settings = {
             "org": "Полиция",
             "rang": "Офицер",
@@ -28,56 +31,44 @@ class RPClient(QWidget):
         }
 
         self.sock = None
+        self.flat_subcat_map = {}
         self.init_ui()
         self.connect_to_server()
 
     def load_formats(self):
-        with open(CONFIG_PATH, encoding="utf-8") as f:
-            self.formats = json.load(f)
-        print("[INFO] Форматы загружены")
+        try:
+            with open(CONFIG_PATH, encoding="utf-8") as f:
+                self.formats = json.load(f)
+            print("[INFO] Форматы загружены")
+        except Exception as e:
+            print("[ERROR] Не удалось загрузить форматы:", e)
+            self.formats = {}
 
     def load_phrases(self):
-        with open(PHRASES_PATH, encoding="utf-8") as f:
-            self.phrases = json.load(f)
-        print("[INFO] Фразы загружены")
+        try:
+            with open(PHRASES_PATH, encoding="utf-8") as f:
+                self.phrases = json.load(f)
+            print("[INFO] Фразы загружены")
+        except Exception as e:
+            print("[ERROR] Не удалось загрузить фразы:", e)
+            self.phrases = {}
 
     def init_ui(self):
-        main_layout = QHBoxLayout()
-        left_layout = QVBoxLayout()
-        middle_layout = QVBoxLayout()
-        right_layout = QVBoxLayout()
+        main_layout = QVBoxLayout(self)
+
+        # Настройки (организация, звание, имя)
         settings_layout = QHBoxLayout()
-
-        # Категории
-        self.cat_list = QListWidget()
-        self.cat_list.addItems(self.phrases.keys())
-        self.cat_list.currentItemChanged.connect(self.on_category_changed)
-        left_layout.addWidget(QLabel("Категории"))
-        left_layout.addWidget(self.cat_list)
-
-        # Подкатегории и подподкатегории вместе
-        self.subcat_list = QListWidget()
-        self.subcat_list.currentItemChanged.connect(self.on_subcategory_changed)
-        middle_layout.addWidget(QLabel("Подкатегории / Подподкатегории"))
-        middle_layout.addWidget(self.subcat_list)
-
-        # Фразы
-        self.phrase_list = QListWidget()
-        self.phrase_list.itemDoubleClicked.connect(self.on_phrase_double_clicked)
-        right_layout.addWidget(QLabel("Фразы (двойной клик для отправки)"))
-        right_layout.addWidget(self.phrase_list)
-
-        # Настройки
         self.org_combo = QComboBox()
-        self.org_combo.addItems(["Полиция", "ДПС", "ФСБ", "ФСО", "ФСИН", "ФССП", "Кошко-полиция"])
+        self.org_combo.addItems([
+            "Полиция", "ДПС", "ФСБ", "ФСО", "ФСИН", "ФССП", "Кошко-полиция"
+        ])
         self.org_combo.setCurrentText(self.user_settings["org"])
         self.org_combo.currentTextChanged.connect(lambda v: self.update_setting("org", v))
 
         self.rang_combo = QComboBox()
-        # Пример должностей, можно расширить
         self.rang_combo.addItems([
-            "Офицер", "Сержант", "Лейтенант", "Капитан", "Майор", "Подполковник", "Полковник",
-            "Рядовой", "Старший лейтенант"
+            "Офицер", "Сержант", "Лейтенант", "Капитан", "Майор",
+            "Подполковник", "Полковник", "Рядовой", "Старший лейтенант"
         ])
         self.rang_combo.setCurrentText(self.user_settings["rang"])
         self.rang_combo.currentTextChanged.connect(lambda v: self.update_setting("rang", v))
@@ -94,21 +85,77 @@ class RPClient(QWidget):
         settings_layout.addWidget(QLabel("Имя:"))
         settings_layout.addWidget(self.name_edit)
 
-        # Собираем всё
-        main_v_layout = QVBoxLayout()
-        main_v_layout.addLayout(settings_layout)
-        main_v_layout.addLayout(main_layout)
+        main_layout.addLayout(settings_layout)
 
-        main_layout.addLayout(left_layout, 1)
-        main_layout.addLayout(middle_layout, 1)
-        main_layout.addLayout(right_layout, 2)
+        # Основной рабочий блок с 3 списками
+        lists_layout = QHBoxLayout()
 
-        self.setLayout(main_v_layout)
+        # Категории
+        self.cat_list = QListWidget()
+        self.cat_list.addItems(self.phrases.keys())
+        self.cat_list.currentItemChanged.connect(self.on_category_changed)
+        lists_layout.addWidget(self.create_group_widget("Категории", self.cat_list))
 
-        # Изначально загрузить первую категорию
+        # Подкатегории + Подподкатегории
+        self.subcat_list = QListWidget()
+        self.subcat_list.currentItemChanged.connect(self.on_subcategory_changed)
+        lists_layout.addWidget(self.create_group_widget("Подкатегории / Подподкатегории", self.subcat_list))
+
+        # Фразы
+        self.phrase_list = QListWidget()
+        self.phrase_list.itemDoubleClicked.connect(self.on_phrase_double_clicked)
+        lists_layout.addWidget(self.create_group_widget("Фразы (двойной клик для отправки)", self.phrase_list))
+
+        main_layout.addLayout(lists_layout)
+
+        # Загрузка первой категории по умолчанию
         if self.phrases:
             first_cat = list(self.phrases.keys())[0]
+            self.cat_list.setCurrentRow(0)
             self.load_subcategories(first_cat)
+
+        # Применяем стиль
+        self.apply_styles()
+
+    def create_group_widget(self, title, widget):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        label = QLabel(title)
+        label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 6px;")
+        layout.addWidget(label)
+        layout.addWidget(widget)
+        return container
+
+    def apply_styles(self):
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #121212;
+                color: #e0e0e0;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            }
+            QListWidget {
+                background-color: #1e1e1e;
+                border: 1px solid #444;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QListWidget::item:selected {
+                background-color: #3a86ff;
+                color: white;
+            }
+            QComboBox, QLineEdit {
+                background-color: #1e1e1e;
+                border: 1px solid #444;
+                padding: 4px 6px;
+                color: #e0e0e0;
+                font-size: 13px;
+                border-radius: 4px;
+                min-width: 120px;
+            }
+            QLabel {
+                color: #aaa;
+            }
+        """)
 
     def update_setting(self, key, value):
         self.user_settings[key] = value
@@ -123,80 +170,63 @@ class RPClient(QWidget):
     def load_subcategories(self, category):
         self.subcat_list.clear()
         subcats = self.phrases.get(category, {})
-        # subcats может быть dict с подподкатегориями или сразу список фраз
-        # Чтобы поддержать вложенность, собираем список подкатегорий и подподкатегорий в формате "Подкатегория > Подподкатегория"
-        items = []
-        self.flat_subcat_map = {}  # ключ - отображение, значение - объект подкатегории (dict или list)
+        self.flat_subcat_map.clear()
 
         def recurse_subcats(d, prefix=""):
             for k, v in d.items():
                 if isinstance(v, dict):
-                    # если есть ключи, внутри может быть "Фразы" и подкатегории
-                    # если у dict есть ключи 'prefix' и 'suffix', то это формат, а не подкатегория
-                    if "Фразы" in v or "/me" in v or "prefix" in v:
-                        # Это подкатегория с фразами
+                    # Проверяем, если это подкатегория с фразами
+                    if any(isinstance(val, list) for val in v.values()):
                         label = prefix + k
-                        items.append(label)
                         self.flat_subcat_map[label] = v
+                        self.subcat_list.addItem(label)
                     else:
-                        # Это вложенная подподкатегория
+                        # Вложенная подподкатегория
                         recurse_subcats(v, prefix + k + " > ")
                 elif isinstance(v, list):
-                    # список фраз, просто добавляем
                     label = prefix + k
-                    items.append(label)
                     self.flat_subcat_map[label] = v
+                    self.subcat_list.addItem(label)
 
         recurse_subcats(subcats)
-        self.subcat_list.addItems(items)
 
     def on_subcategory_changed(self, current, previous):
         self.phrase_list.clear()
-        if current is None:
+        if not current:
             return
         label = current.text()
         data = self.flat_subcat_map.get(label)
-        if data is None:
+        if not data:
             return
         phrases = []
         if isinstance(data, dict):
-            # собрать все фразы в этой подкатегории из ключей "/me" и "Фразы" и т.п.
-            for key, val in data.items():
+            # Собираем все списки фраз из ключей
+            for val in data.values():
                 if isinstance(val, list):
                     phrases.extend(val)
         elif isinstance(data, list):
             phrases = data
-
         self.phrase_list.addItems(phrases)
 
     def on_phrase_double_clicked(self, item):
         text = item.text()
-        # Получить текущую категорию и подкатегорию
         cat = self.cat_list.currentItem().text()
         subcat_label = self.subcat_list.currentItem().text()
-        # Получить префикс и суффикс из formats.json
         prefix, suffix = self.get_format_prefix_suffix(cat, subcat_label)
-        # Заменить переменные
         text_to_send = self.apply_variables(prefix + text + suffix)
         print(f"[SEND] {text_to_send}")
         self.send_to_server(text_to_send)
 
     def get_format_prefix_suffix(self, category, subcategory_label):
-        # Разбиваем подкатегорию по " > ", берем последний сегмент
         parts = subcategory_label.split(" > ")
         subcat = parts[-1]
-        # Ищем формат
         cat_fmt = self.formats.get(category, {})
-        # Подкатегории в формате ключ: {prefix, suffix} или может быть вложенно
-        # Для упрощения сначала ищем точное совпадение subcat
         fmt = None
         if subcat in cat_fmt:
             fmt = cat_fmt[subcat]
         else:
-            # попробуем взять общий "Фразы"
             if "Фразы" in cat_fmt:
                 fmt = cat_fmt["Фразы"]
-
         if fmt:
             prefix = fmt.get("prefix", "")
             suffix = fmt.get("suffix", "")
@@ -215,9 +245,7 @@ class RPClient(QWidget):
             self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.sock.connect((SERVER_IP, SERVER_PORT))
             print(f"[INFO] Подключено к серверу {SERVER_IP}:{SERVER_PORT}")
-            # Отправляем сразу тип клиента
             self.sock.sendall(b"CLIENT_WITH_UI\n")
-            # Запускаем поток чтения
             threading.Thread(target=self.receive_loop, daemon=True).start()
         except Exception as e:
             QMessageBox.critical(self, "Ошибка подключения", str(e))
@@ -241,11 +269,13 @@ class RPClient(QWidget):
                 print(f"[ERROR] Ошибка получения данных: {e}")
                 break
 
+
 def main():
     app = QApplication(sys.argv)
     client = RPClient()
     client.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
