@@ -7,10 +7,9 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QLabel, QTabWidget, QListWidget, QListWidgetItem,
     QComboBox, QLineEdit, QGroupBox, QFormLayout, QMessageBox,
-    QSizePolicy
+    QTreeWidget, QTreeWidgetItem
 )
 from PySide6.QtCore import Qt, Slot
-
 
 CONFIG_PATH = Path("rp_config.json")
 PHRASES_PATH = Path("rp_phrases.json")
@@ -21,7 +20,7 @@ class RPClient(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RP Client - Отправка реплик")
-        self.resize(1100, 700)
+        self.resize(1000, 700)
 
         self.socket = None
         self.receive_thread = None
@@ -41,7 +40,7 @@ class RPClient(QWidget):
 
         self.init_ui()
         self.populate_settings()
-        self.populate_categories()
+        self.populate_phrases()
         self.connect_to_server_auto()
 
     def load_json(self, path: Path, default=None):
@@ -85,7 +84,7 @@ class RPClient(QWidget):
                 border-bottom-color: white;
                 font-weight: 600;
             }
-            QListWidget {
+            QTreeWidget, QListWidget {
                 background: white;
                 border: 1px solid #ccc;
                 border-radius: 6px;
@@ -143,17 +142,17 @@ class RPClient(QWidget):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Вкладка Реплики с 4 колонками
+        # Реплики - 4 колонки: дерево категорий с 4 уровнями + список фраз
         self.tab_phrases = QWidget()
         self.tabs.addTab(self.tab_phrases, "Реплики")
         self.create_phrases_tab()
 
-        # Вкладка Настройки
+        # Настройки
         self.tab_settings = QWidget()
         self.tabs.addTab(self.tab_settings, "Настройки")
         self.create_settings_tab()
 
-        # Вкладка Сервер
+        # Сервер
         self.tab_server = QWidget()
         self.tabs.addTab(self.tab_server, "Сервер")
         self.create_server_tab()
@@ -163,45 +162,26 @@ class RPClient(QWidget):
     def create_phrases_tab(self):
         layout = QHBoxLayout(self.tab_phrases)
 
-        # 4 QListWidget для 4 колонок
-        self.list_categories = QListWidget()
-        self.list_categories.setMaximumWidth(200)
-        self.list_categories.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.list_categories.setSelectionMode(QListWidget.SingleSelection)
-        layout.addWidget(self.list_categories)
+        # Слева дерево категорий и подкатегорий (4 уровня)
+        self.phrases_tree = QTreeWidget()
+        self.phrases_tree.setHeaderLabel("Категории")
+        self.phrases_tree.setMaximumWidth(400)
+        layout.addWidget(self.phrases_tree)
 
-        self.list_subcategories1 = QListWidget()
-        self.list_subcategories1.setMaximumWidth(200)
-        self.list_subcategories1.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.list_subcategories1.setSelectionMode(QListWidget.SingleSelection)
-        layout.addWidget(self.list_subcategories1)
+        # Справа список фраз выбранной категории
+        right_layout = QVBoxLayout()
+        layout.addLayout(right_layout)
 
-        self.list_subcategories2 = QListWidget()
-        self.list_subcategories2.setMaximumWidth(200)
-        self.list_subcategories2.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.list_subcategories2.setSelectionMode(QListWidget.SingleSelection)
-        layout.addWidget(self.list_subcategories2)
+        self.phrases_list = QListWidget()
+        right_layout.addWidget(self.phrases_list)
 
-        self.list_phrases = QListWidget()
-        self.list_phrases.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout.addWidget(self.list_phrases)
+        self.phrases_list.itemDoubleClicked.connect(self.on_phrase_double_clicked)
+        self.phrases_tree.itemClicked.connect(self.on_category_selected)
 
-        # Лог сообщений под колонками
-        log_layout = QVBoxLayout()
-        main_v_layout = QVBoxLayout()
-        main_v_layout.addLayout(layout)
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(140)
-        main_v_layout.addWidget(self.log_text)
-
-        self.tab_phrases.setLayout(main_v_layout)
-
-        # Связываем выборы
-        self.list_categories.itemClicked.connect(self.on_category_selected)
-        self.list_subcategories1.itemClicked.connect(self.on_subcategory1_selected)
-        self.list_subcategories2.itemClicked.connect(self.on_subcategory2_selected)
-        self.list_phrases.itemDoubleClicked.connect(self.on_phrase_double_clicked)
+        self.log_text.setMaximumHeight(150)
+        right_layout.addWidget(self.log_text)
 
     def create_settings_tab(self):
         layout = QVBoxLayout(self.tab_settings)
@@ -407,105 +387,99 @@ class RPClient(QWidget):
             self.label_status.setText("Статус: Отключено")
             self.log("Отключено от сервера.")
 
-    def populate_categories(self):
-        # Заполняем первую колонку категориями
-        self.list_categories.clear()
-        cats = sorted(self.phrases.keys())
-        self.list_categories.addItems(cats)
+    def populate_phrases(self):
+        self.phrases_tree.clear()
+        self.phrases_list.clear()
 
-        self.list_subcategories1.clear()
-        self.list_subcategories2.clear()
-        self.list_phrases.clear()
+        def add_phrases_recursive(parent, data, path):
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    if key in ("Фразы", "/me"):
+                        # не добавляем в дерево, это листовые элементы
+                        continue
+                    cat_item = QTreeWidgetItem(parent, [key])
+                    add_phrases_recursive(cat_item, value, path + [key])
+            elif isinstance(data, list):
+                # Списки фраз не добавляем в дерево
+                pass
 
-    @Slot()
-    def on_category_selected(self, item: QListWidgetItem):
-        cat = item.text()
-        self.list_subcategories1.clear()
-        self.list_subcategories2.clear()
-        self.list_phrases.clear()
+        add_phrases_recursive(self.phrases_tree.invisibleRootItem(), self.phrases, [])
 
-        subcats = []
-        data_cat = self.phrases.get(cat, {})
-        if isinstance(data_cat, dict):
-            subcats = sorted(data_cat.keys())
-        self.list_subcategories1.addItems(subcats)
+        self.phrases_tree.expandToDepth(0)
 
     @Slot()
-    def on_subcategory1_selected(self, item: QListWidgetItem):
-        cat_item = self.list_categories.currentItem()
-        if not cat_item:
+    def on_category_selected(self, item: QTreeWidgetItem, column: int):
+        # Собираем путь до выбранного узла
+        path = []
+        cur = item
+        while cur:
+            path.insert(0, cur.text(0))
+            cur = cur.parent()
+
+        # По пути ищем узел с фразами
+        def get_node_by_path(data, keys):
+            for k in keys:
+                if isinstance(data, dict) and k in data:
+                    data = data[k]
+                else:
+                    return None
+            return data
+
+        node = get_node_by_path(self.phrases, path)
+        self.phrases_list.clear()
+        if not node:
             return
-        cat = cat_item.text()
-        subcat1 = item.text()
 
-        self.list_subcategories2.clear()
-        self.list_phrases.clear()
+        # Добавляем все "Фразы" и "/me" в список с метаданными
+        def add_phrases_to_list(lst_widget, phrases, me=False):
+            for phrase in phrases:
+                list_item = QListWidgetItem(phrase)
+                list_item.setData(Qt.UserRole, {
+                    "path": path + (["/me"] if me else []),
+                    "me": me,
+                    "text": phrase
+                })
+                lst_widget.addItem(list_item)
 
-        data_subcat = self.phrases.get(cat, {}).get(subcat1, {})
-        if isinstance(data_subcat, dict):
-            subsubcats = sorted(k for k in data_subcat.keys() if k != "Фразы")
-            self.list_subcategories2.addItems(subsubcats)
-
-            # Если есть "Фразы" на этом уровне, сразу покажем их
-            if "Фразы" in data_subcat and isinstance(data_subcat["Фразы"], list):
-                self.list_phrases.addItems(data_subcat["Фразы"])
-        elif isinstance(data_subcat, list):
-            self.list_phrases.addItems(data_subcat)
-
-    @Slot()
-    def on_subcategory2_selected(self, item: QListWidgetItem):
-        cat_item = self.list_categories.currentItem()
-        subcat1_item = self.list_subcategories1.currentItem()
-        if not cat_item or not subcat1_item:
-            return
-        cat = cat_item.text()
-        subcat1 = subcat1_item.text()
-        subcat2 = item.text()
-
-        self.list_phrases.clear()
-
-        data_subsubcat = self.phrases.get(cat, {}).get(subcat1, {}).get(subcat2, {})
-        if isinstance(data_subsubcat, dict):
-            # если словарь с ключом "Фразы"
-            if "Фразы" in data_subsubcat and isinstance(data_subsubcat["Фразы"], list):
-                self.list_phrases.addItems(data_subsubcat["Фразы"])
-        elif isinstance(data_subsubcat, list):
-            self.list_phrases.addItems(data_subsubcat)
+        if isinstance(node, dict):
+            if "Фразы" in node and isinstance(node["Фразы"], list):
+                add_phrases_to_list(self.phrases_list, node["Фразы"], me=False)
+            if "/me" in node and isinstance(node["/me"], list):
+                add_phrases_to_list(self.phrases_list, node["/me"], me=True)
 
     @Slot()
     def on_phrase_double_clicked(self, item: QListWidgetItem):
-        phrase = item.text()
+        data = item.data(Qt.UserRole)
+        if not data:
+            return
+        text = data["text"]
+        path = data["path"]  # путь для формата
 
-        cat_item = self.list_categories.currentItem()
-        subcat1_item = self.list_subcategories1.currentItem()
-        subcat2_item = self.list_subcategories2.currentItem()
-
-        cat = cat_item.text() if cat_item else None
-        subcat1 = subcat1_item.text() if subcat1_item else None
-        subcat2 = subcat2_item.text() if subcat2_item else None
-
-        prefix = ""
-        suffix = ""
-
-        # Поиск формата
-        fmt_level = self.formats.get(cat, {})
-        if subcat1:
-            fmt_level = fmt_level.get(subcat1, {})
-        if subcat2:
-            fmt_level = fmt_level.get(subcat2, {})
-
-        prefix = fmt_level.get("prefix", "")
-        suffix = fmt_level.get("suffix", "")
-
-        # Подстановка переменных
         org = self.config.get("org", "Полиция")
         rang = self.config.get("rang", "Офицер")
         name = self.config.get("name", "Анна")
+        decl = self.config.get("declension", "nominative")
 
-        text = f"{prefix}{phrase}{suffix}"
+        # Получаем формат по пути
+        def get_format_by_path(formats, keys):
+            for k in keys:
+                if isinstance(formats, dict) and k in formats:
+                    formats = formats[k]
+                else:
+                    return {"prefix": "", "suffix": ""}
+            if isinstance(formats, dict) and "prefix" in formats and "suffix" in formats:
+                return formats
+            return {"prefix": "", "suffix": ""}
+
+        fmt = get_format_by_path(self.formats, path)
+
+        # Подставляем переменные
         text = text.replace("{org}", org).replace("{rang}", rang).replace("{name}", name)
 
-        self.send_message(text)
+        # Оборачиваем с prefix и suffix
+        full_text = f"{fmt['prefix']}{text}{fmt['suffix']}"
+
+        self.send_message(full_text)
 
     def send_message(self, text: str):
         if not self.connected:
