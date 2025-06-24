@@ -10,72 +10,61 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 
-import pymorphy2
-
-morph = pymorphy2.MorphAnalyzer()
-
 CONFIG_PATH = Path("rp_config.json")
 PHRASES_PATH = Path("rp_phrases.json")
 FORMATS_PATH = Path("formats.json")
 
 DEFAULT_CONFIG = {
-    "org": "Кошко-полиция",
-    "rang": "Майор",
-    "name": "Рико",
+    # Организация во всех падежах
+    "org_nomn": "Кошко-полиция",
+    "org_gent": "Кошко-полиции",
+    "org_datv": "Кошко-полиции",
+    "org_accs": "Кошко-полицию",
+    "org_ablt": "Кошко-полицией",
+    "org_loct": "Кошко-полиции",
+    # Звание во всех падежах
+    "rang_nomn": "Майор",
+    "rang_gent": "Майора",
+    "rang_datv": "Майору",
+    "rang_accs": "Майора",
+    "rang_ablt": "Майором",
+    "rang_loct": "Майоре",
+    # Имя во всех падежах
+    "name_nomn": "Рико",
+    "name_gent": "Рико",
+    "name_datv": "Рико",
+    "name_accs": "Рико",
+    "name_ablt": "Рико",
+    "name_loct": "Рико",
+    # Сервер
     "server_ip": "109.73.204.176",
     "server_port": 12345
 }
 
-# Пример падежей и предлогов
-PREPOSITIONS = {
-    "в": "loct",
-    "на": "loct",
-    "к": "datv",
-    "по": "datv",
-    "с": "ablt",
-    "со": "ablt",
-    "от": "gent",
-    "у": "gent",
-    "без": "gent",
-    "для": "gent",
-    "из": "gent",
-    "о": "loct",
-    "об": "loct",
-    "за": "accs",
-    "про": "accs",
-    "через": "accs",
-}
+# Падежи для выбора
+CASES = ["nomn", "gent", "datv", "accs", "ablt", "loct"]
 
-def detect_case_around(match, text):
-    start = match.start()
-    left_text = text[:start].rstrip()
-    tokens = re.findall(r"\b\w+\b", left_text.lower())
-    if not tokens:
-        return "nomn"
-    prev_word = tokens[-1]
-    return PREPOSITIONS.get(prev_word, "nomn")
-
-def decline(word, case):
-    parsed = morph.parse(word)[0]
-    form = parsed.inflect({case})
-    return form.word if form else word
-
-def format_phrase_auto_case(template, context):
-    pattern = re.compile(r"\{([^}]+)\}")
+def format_phrase_with_cases(template, context):
+    """
+    Заменяет переменные с указанием падежа:
+    {org:datv} -> context['org_datv']
+    {rang:gent} -> context['rang_gent']
+    Если падеж не указан, берём именительный (nomn)
+    """
+    pattern = re.compile(r"\{(\w+)(?::(\w+))?\}")
 
     def repl(m):
         key = m.group(1)
-        val = context.get(key, "")
-        case = detect_case_around(m, template)
-        val = decline(val, case)
-        return val
+        case = m.group(2) if m.group(2) else "nomn"
+        ctx_key = f"{key}_{case}"
+        return context.get(ctx_key, f"{{{key}:{case}}}")
 
     return pattern.sub(repl, template)
 
 class RPClient(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("RP Клиент с автоподбором падежа и форматами")
+        self.setWindowTitle("RP Клиент с падежами из настроек")
         self.resize(750, 600)
 
         self.config = self.load_config()
@@ -85,7 +74,7 @@ class RPClient(QWidget):
         self.create_ui()
         self.populate_categories()
 
-        self.connected = False  # Для статуса сервера
+        self.connected = False
 
     def load_config(self):
         if CONFIG_PATH.exists():
@@ -125,13 +114,6 @@ class RPClient(QWidget):
                     "Документы": {"prefix": "*", "suffix": "*"},
                     "Опрос": {"prefix": "*", "suffix": "*"},
                     "Фразы": {"prefix": "", "suffix": ""}
-                },
-                "Рация": {
-                    "Обычное": {"prefix": "Рация {org}: ", "suffix": ""},
-                    "Поддержка": {"prefix": "Рация {org}: ", "suffix": ""},
-                    "Погоня": {"prefix": "Рация {org}: ", "suffix": ""},
-                    "Доклад": {"prefix": "Рация {org}: ", "suffix": ""},
-                    "Запрос": {"prefix": "Рация {org}: ", "suffix": ""}
                 },
                 "Личная жизнь": {
                     "Обычное": {"prefix": "*", "suffix": "*"},
@@ -175,7 +157,9 @@ class RPClient(QWidget):
 
         self.result_edit = QTextEdit()
         self.result_edit.setReadOnly(True)
-        self.result_edit.setPlaceholderText("Двойной клик по фразе — вывод с автоподбором падежей и форматами...")
+        self.result_edit.setPlaceholderText(
+            "Двойной клик по фразе — вывод с выбранными падежами и форматами..."
+        )
         phrases_layout.addWidget(self.result_edit)
 
         self.tabs.addTab(phrases_tab, "Реплики")
@@ -186,14 +170,15 @@ class RPClient(QWidget):
 
         form_layout = QFormLayout()
 
-        self.org_edit = QLineEdit(self.config.get("org", ""))
-        form_layout.addRow("Организация:", self.org_edit)
-
-        self.rang_edit = QLineEdit(self.config.get("rang", ""))
-        form_layout.addRow("Звание:", self.rang_edit)
-
-        self.name_edit = QLineEdit(self.config.get("name", ""))
-        form_layout.addRow("Имя:", self.name_edit)
+        # Для каждой переменной добавляем поля для падежей
+        for var in ["org", "rang", "name"]:
+            for case in CASES:
+                key = f"{var}_{case}"
+                val = self.config.get(key, "")
+                label = f"{var.capitalize()} ({case})"
+                edit = QLineEdit(val)
+                setattr(self, f"{key}_edit", edit)
+                form_layout.addRow(label, edit)
 
         settings_layout.addLayout(form_layout)
 
@@ -207,18 +192,17 @@ class RPClient(QWidget):
         server_tab = QWidget()
         server_layout = QVBoxLayout(server_tab)
 
-        self.server_form_layout = QFormLayout()
-
         self.server_ip_edit = QLineEdit(self.config.get("server_ip", ""))
         self.server_port_edit = QLineEdit(str(self.config.get("server_port", "")))
         self.access_code_edit = QLineEdit()
         self.access_code_edit.setEchoMode(QLineEdit.Password)
 
-        self.server_form_layout.addRow("IP сервера:", self.server_ip_edit)
-        self.server_form_layout.addRow("Порт сервера:", self.server_port_edit)
-        self.server_form_layout.addRow("Код доступа:", self.access_code_edit)
+        server_form = QFormLayout()
+        server_form.addRow("IP сервера:", self.server_ip_edit)
+        server_form.addRow("Порт сервера:", self.server_port_edit)
+        server_form.addRow("Код доступа:", self.access_code_edit)
 
-        server_layout.addLayout(self.server_form_layout)
+        server_layout.addLayout(server_form)
 
         self.connect_btn = QPushButton("Подключиться")
         self.connect_btn.clicked.connect(self.on_connect_clicked)
@@ -229,13 +213,14 @@ class RPClient(QWidget):
 
         self.tabs.addTab(server_tab, "Сервер")
 
-        # При смене вкладки сбрасываем доступ к серверу
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
     def on_save_settings(self):
-        self.config["org"] = self.org_edit.text().strip()
-        self.config["rang"] = self.rang_edit.text().strip()
-        self.config["name"] = self.name_edit.text().strip()
+        for var in ["org", "rang", "name"]:
+            for case in CASES:
+                key = f"{var}_{case}"
+                edit = getattr(self, f"{key}_edit")
+                self.config[key] = edit.text().strip()
         self.save_config()
         QMessageBox.information(self, "Настройки", "Настройки сохранены")
 
@@ -253,7 +238,6 @@ class RPClient(QWidget):
         self.config["server_port"] = int(port_text)
         self.save_config()
         self.status_label.setText(f"Статус: Подключено к {ip}:{port_text}")
-        # Здесь можно добавить реальное подключение к серверу
         self.connected = True
 
     def on_tab_changed(self, index):
@@ -291,33 +275,30 @@ class RPClient(QWidget):
 
     def on_phrase_double_clicked(self, item):
         phrase = item.text()
-        context = {
-            "org": self.org_edit.text().strip(),
-            "rang": self.rang_edit.text().strip(),
-            "name": self.name_edit.text().strip(),
-        }
-        formatted = format_phrase_auto_case(phrase, context)
+        context = {}
+        for var in ["org", "rang", "name"]:
+            for case in CASES:
+                key = f"{var}_{case}"
+                context[key] = self.config.get(key, "")
+        formatted = format_phrase_with_cases(phrase, context)
 
-        # Добавляем префикс/суффикс из formats.json
         prefix = ""
         suffix = ""
         fmts = self.formats.get(self.current_category, {})
-        # Подкатегории могут быть с форматами
         if isinstance(fmts, dict):
             subfmt = fmts.get(self.current_subcategory, {})
             if isinstance(subfmt, dict):
                 prefix = subfmt.get("prefix", "")
                 suffix = subfmt.get("suffix", "")
             else:
-                # Может быть прямая строка
                 prefix = fmts.get("prefix", "")
                 suffix = fmts.get("suffix", "")
-        # Заменяем переменные в префиксе/суффиксе
-        prefix = format_phrase_auto_case(prefix, context)
-        suffix = format_phrase_auto_case(suffix, context)
+        prefix = format_phrase_with_cases(prefix, context)
+        suffix = format_phrase_with_cases(suffix, context)
 
         final_text = f"{prefix}{formatted}{suffix}"
         self.result_edit.setText(final_text)
+
 
 def main():
     app = QApplication(sys.argv)
