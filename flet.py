@@ -6,21 +6,19 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QLabel, QTabWidget, QListWidget, QListWidgetItem,
-    QComboBox, QLineEdit, QGroupBox, QFormLayout, QMessageBox, QTreeWidget, QTreeWidgetItem
+    QComboBox, QLineEdit, QGroupBox, QFormLayout, QMessageBox
 )
 from PySide6.QtCore import Qt, Slot
 
-
 CONFIG_PATH = Path("rp_config.json")
 PHRASES_PATH = Path("rp_phrases.json")
-FORMATS_PATH = Path("formats.json")
 
 
 class RPClient(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RP Client - Отправка реплик")
-        self.resize(900, 650)
+        self.resize(1000, 700)
 
         self.socket = None
         self.receive_thread = None
@@ -35,8 +33,30 @@ class RPClient(QWidget):
             "server_port": 12345,
             "declension": "nominative"
         })
-        self.phrases = self.load_json(PHRASES_PATH, default={})
-        self.formats = self.load_json(FORMATS_PATH, default={})
+        self.phrases = self.load_json(PHRASES_PATH, default={
+            "Общие": {
+                "Приветствия": {
+                    "Фразы": [
+                        "Здравствуйте, я {name} из {org}, {rang}.",
+                        "Добрый день, {name} на связи.",
+                    ]
+                },
+                "Прощания": {
+                    "Фразы": [
+                        "Всего доброго!",
+                        "Спасибо за внимание, удачи!",
+                    ]
+                }
+            },
+            "Рабочие": {
+                "Проверка документов": {
+                    "Фразы": [
+                        "Покажите, пожалуйста, документы.",
+                        "Прошу предъявить удостоверение личности.",
+                    ]
+                }
+            }
+        })
 
         self.init_ui()
         self.populate_settings()
@@ -59,22 +79,100 @@ class RPClient(QWidget):
             print(f"Ошибка сохранения конфигурации: {e}")
 
     def init_ui(self):
-        main_layout = QVBoxLayout(self)
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f9f9f9;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                font-size: 14px;
+                color: #222;
+            }
+            QTabWidget::pane {
+                border: 1px solid #ddd;
+                background: white;
+            }
+            QTabBar::tab {
+                background: #eee;
+                border: 1px solid #ccc;
+                padding: 8px 18px;
+                margin-right: 2px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                min-width: 80px;
+            }
+            QTabBar::tab:selected {
+                background: white;
+                border-bottom-color: white;
+                font-weight: 600;
+            }
+            QListWidget {
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 4px;
+            }
+            QListWidget::item {
+                padding: 6px 8px;
+            }
+            QListWidget::item:selected {
+                background-color: #3399ff;
+                color: white;
+            }
+            QPushButton {
+                background-color: #3399ff;
+                border: none;
+                padding: 8px 20px;
+                border-radius: 6px;
+                color: white;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #2a80d6;
+            }
+            QLineEdit, QComboBox {
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 5px 8px;
+            }
+            QTextEdit {
+                background: white;
+                border: 1px solid #ccc;
+                border-radius: 6px;
+                padding: 6px;
+                font-family: Consolas, monospace;
+                font-size: 13px;
+            }
+            QLabel {
+                font-weight: 600;
+            }
+            QGroupBox {
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                margin-top: 10px;
+                padding: 10px;
+            }
+            QGroupBox:title {
+                subcontrol-origin: margin;
+                subcontrol-position: top center;
+                padding: 0 3px;
+            }
+        """)
 
+        main_layout = QVBoxLayout(self)
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Вкладка Реплики
+        # Таб с репликами: 3 колонки
         self.tab_phrases = QWidget()
         self.tabs.addTab(self.tab_phrases, "Реплики")
         self.create_phrases_tab()
 
-        # Вкладка Настройки
+        # Настройки
         self.tab_settings = QWidget()
         self.tabs.addTab(self.tab_settings, "Настройки")
         self.create_settings_tab()
 
-        # Вкладка Сервер
+        # Сервер
         self.tab_server = QWidget()
         self.tabs.addTab(self.tab_server, "Сервер")
         self.create_server_tab()
@@ -82,18 +180,23 @@ class RPClient(QWidget):
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
     def create_phrases_tab(self):
-        layout = QVBoxLayout(self.tab_phrases)
+        layout = QHBoxLayout(self.tab_phrases)
 
-        # Используем QTreeWidget для вложенных категорий
-        self.phrases_tree = QTreeWidget()
-        self.phrases_tree.setHeaderHidden(True)
-        layout.addWidget(self.phrases_tree)
-        self.phrases_tree.itemDoubleClicked.connect(self.on_phrase_double_clicked)
+        # 3 колонки: Категории, Подкатегории, Фразы
+        self.list_categories = QListWidget()
+        self.list_categories.setMaximumWidth(250)
+        self.list_subcategories = QListWidget()
+        self.list_subcategories.setMaximumWidth(250)
+        self.list_phrases = QListWidget()
 
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
-        layout.addWidget(self.log_text)
+        layout.addWidget(self.list_categories)
+        layout.addWidget(self.list_subcategories)
+        layout.addWidget(self.list_phrases)
+
+        # Связи сигналов
+        self.list_categories.currentItemChanged.connect(self.on_category_selected)
+        self.list_subcategories.currentItemChanged.connect(self.on_subcategory_selected)
+        self.list_phrases.itemDoubleClicked.connect(self.on_phrase_double_clicked)
 
     def create_settings_tab(self):
         layout = QVBoxLayout(self.tab_settings)
@@ -124,7 +227,6 @@ class RPClient(QWidget):
         layout.addWidget(group_user)
         layout.addStretch()
 
-        # Сохраняем при изменениях
         self.combo_org.currentTextChanged.connect(self.on_setting_changed)
         self.combo_rang.currentTextChanged.connect(self.on_setting_changed)
         self.edit_name.textChanged.connect(self.on_setting_changed)
@@ -194,7 +296,6 @@ class RPClient(QWidget):
             self.btn_connect.setEnabled(True)
 
     def log(self, message: str):
-        self.log_text.append(message)
         self.log_server.append(message)
 
     def populate_settings(self):
@@ -301,55 +402,50 @@ class RPClient(QWidget):
             self.log("Отключено от сервера.")
 
     def populate_phrases(self):
-        self.phrases_tree.clear()
+        self.list_categories.clear()
+        self.list_subcategories.clear()
+        self.list_phrases.clear()
 
-        def add_phrases_recursive(parent, data):
-            # data - dict or list
-            if isinstance(data, dict):
-                for key, value in data.items():
-                    # Если value словарь с ключами "Фразы" или "/me", считаем, что лист
-                    if isinstance(value, dict) and any(k in value for k in ("Фразы", "/me")):
-                        # Создаем подкатегорию и добавляем туда фразы
-                        cat_item = QTreeWidgetItem(parent, [key])
-                        # Добавляем все фразы
-                        for phrase in value.get("Фразы", []):
-                            phrase_item = QTreeWidgetItem(cat_item, [phrase])
-                            phrase_item.setData(0, Qt.UserRole, phrase)
-                        # Можно /me в будущем использовать при отправке
-                    else:
-                        # Подкатегория с вложенностями
-                        cat_item = QTreeWidgetItem(parent, [key])
-                        add_phrases_recursive(cat_item, value)
-            elif isinstance(data, list):
-                for phrase in data:
-                    phrase_item = QTreeWidgetItem(parent, [phrase])
-                    phrase_item.setData(0, Qt.UserRole, phrase)
-
-        add_phrases_recursive(self.phrases_tree.invisibleRootItem(), self.phrases)
-
-        self.phrases_tree.expandToDepth(0)
+        for cat_name in self.phrases.keys():
+            self.list_categories.addItem(cat_name)
 
     @Slot()
-    def on_phrase_double_clicked(self, item: QTreeWidgetItem, column: int):
-        # Отправлять только если это лист (нет дочерних элементов)
-        if item.childCount() > 0:
+    def on_category_selected(self, current, previous):
+        self.list_subcategories.clear()
+        self.list_phrases.clear()
+        if current is None:
             return
+        cat_name = current.text()
+        subcats = self.phrases.get(cat_name, {})
+        if isinstance(subcats, dict):
+            for subcat_name in subcats.keys():
+                self.list_subcategories.addItem(subcat_name)
 
-        text = item.data(0, Qt.UserRole)
-        if not text:
-            text = item.text(0)
+    @Slot()
+    def on_subcategory_selected(self, current, previous):
+        self.list_phrases.clear()
+        if current is None:
+            return
+        cat_item = self.list_categories.currentItem()
+        if cat_item is None:
+            return
+        cat_name = cat_item.text()
+        subcat_name = current.text()
+        subcat_data = self.phrases.get(cat_name, {}).get(subcat_name, {})
+        if isinstance(subcat_data, dict):
+            phrases = subcat_data.get("Фразы", [])
+            for phrase in phrases:
+                self.list_phrases.addItem(phrase)
 
-        # Подставляем падеж и настройки в текст
+    @Slot()
+    def on_phrase_double_clicked(self, item):
+        text = item.text()
         org = self.config.get("org", "Полиция")
         rang = self.config.get("rang", "Офицер")
         name = self.config.get("name", "Анна")
         decl = self.config.get("declension", "nominative")
-
-        # Для простоты - вставляем без падежей, но можно добавить шаблоны для каждого падежа
-        # Если в дальнейшем нужен сложный падеж - добавить логику здесь
-
+        # Пока просто замена, падежи не реализованы
         text = text.replace("{org}", org).replace("{rang}", rang).replace("{name}", name)
-
         self.send_message(text)
 
     def send_message(self, text: str):
