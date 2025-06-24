@@ -158,6 +158,12 @@ class RPClient(QWidget):
         self.create_server_tab()
 
         self.tabs.currentChanged.connect(self.on_tab_changed)
+    def replace_placeholders(self, text: str) -> str:
+        # Заменяем в тексте все вхождения ключей из self.config в фигурных скобках
+        for key, val in self.config.items():
+            placeholder = "{" + key + "}"
+            text = text.replace(placeholder, val)
+        return text
 
     def create_phrases_tab(self):
         layout = QHBoxLayout(self.tab_phrases)
@@ -475,7 +481,8 @@ class RPClient(QWidget):
 
         # Подставляем переменные
         text = text.replace("{org}", org).replace("{rang}", rang).replace("{name}", name)
-
+        text = self.replace_placeholders(text)
+        self.send_message(text)
         # Оборачиваем с prefix и suffix
         full_text = f"{fmt['prefix']}{text}{fmt['suffix']}"
 
