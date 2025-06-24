@@ -1,160 +1,406 @@
-import flet as ft
+import sys
 import json
+from pathlib import Path
+from PySide6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QListWidget,
+    QListWidgetItem, QLabel, QStackedWidget, QLineEdit, QPushButton,
+    QTabWidget, QTextEdit, QComboBox, QMessageBox, QFormLayout, QCheckBox
+)
+from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtGui import QFont, QColor, QPalette
 import socket
 import threading
-from pathlib import Path
 
 CONFIG_PATH = Path("rp_config.json")
-FORMATS_PATH = Path("formats.json")
 PHRASES_PATH = Path("rp_phrases.json")
+FORMATS_PATH = Path("formats.json")
 
 DEFAULT_CONFIG = {
     "org": "Полиция",
     "rang": "Офицер",
     "name": "Анна",
-    "server_ip": "127.0.0.1",
+    "case": "nominative",  # падеж
+    "server_ip": "109.73.204.176",
     "server_port": 12345
 }
 
-DEFAULT_FORMATS = {
-    "Фразы": {"prefix": "", "suffix": ""},
-    "Рация": {"prefix": "Рация {org}: ", "suffix": ""},
-    "me": {"prefix": "*", "suffix": "*"},
-    "НонРП": {"prefix": "//", "suffix": ""}
+CASE_OPTIONS = {
+    "nominative": "Именительный",
+    "genitive": "Родительный",
+    "dative": "Дательный",
+    "accusative": "Винительный",
+    "instrumental": "Творительный",
+    "prepositional": "Предложный"
 }
 
-# Загрузка настроек
-if not CONFIG_PATH.exists():
-    CONFIG_PATH.write_text(json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2))
-if not FORMATS_PATH.exists():
-    FORMATS_PATH.write_text(json.dumps(DEFAULT_FORMATS, ensure_ascii=False, indent=2))
+# ---------------------------------------
+# Утилиты для загрузки и сохранения конфига и фраз
+def load_json(path, default=None):
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return default
+    else:
+        return default
 
-CONFIG = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-FORMATS = json.loads(FORMATS_PATH.read_text(encoding="utf-8"))
-PHRASES = json.loads(Path(PHRASES_PATH).read_text(encoding="utf-8")) if PHRASES_PATH.exists() else {}
+def save_json(path, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
-client_socket = None
-connected = False
+# ---------------------------------------
+# Автоматическая подстановка падежа (заглушка — можно расширить)
+def apply_case(text, config):
+    # Тут можно добавить более сложную логику падежей
+    # Сейчас просто заменим {org} и {rang} и {name} без изменений
+    text = text.replace("{org}", config.get("org", ""))
+    text = text.replace("{rang}", config.get("rang", ""))
+    text = text.replace("{name}", config.get("name", ""))
+    return text
 
+# ---------------------------------------
+# Кастомные стили в формате QSS для светлой темы и минимализма
+STYLE_SHEET = """
+QWidget {
+    background-color: #f9f9f9;
+    font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+    font-size: 14px;
+    color: #222222;
+}
+QListWidget {
+    background-color: white;
+    border: 1px solid #ccc;
+}
+QListWidget::item:selected {
+    background-color: #5a9def;
+    color: white;
+}
+QTabWidget::pane {
+    border: 1px solid #ccc;
+    top:-1px;
+    background: white;
+}
+QTabBar::tab {
+    background: #ddd;
+    border: 1px solid #ccc;
+    padding: 6px 12px;
+    margin-right: 2px;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+}
+QTabBar::tab:selected {
+    background: white;
+    border-bottom: 1px solid white;
+}
+QLineEdit, QComboBox, QTextEdit {
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 4px;
+}
+QPushButton {
+    background-color: #5a9def;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    color: white;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background-color: #3b7dd8;
+}
+QPushButton:disabled {
+    background-color: #a0c1f7;
+}
+"""
 
-def apply_format(text, category):
-    prefix = FORMATS.get(category, {}).get("prefix", "")
-    suffix = FORMATS.get(category, {}).get("suffix", "")
-    return f"{prefix}{text}{suffix}".replace("{org}", CONFIG['org']).replace("{rang}", CONFIG['rang']).replace("{name}", CONFIG['name'])
+# ---------------------------------------
+class RPClient(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("RP Клиент")
+        self.resize(900, 600)
+        self.config = load_json(CONFIG_PATH, DEFAULT_CONFIG)
+        self.phrases = load_json(PHRASES_PATH, {})
+        self.formats = load_json(FORMATS_PATH, {})
+        self.socket = None
+        self.connected = False
+        self.receive_thread = None
 
+        self.init_ui()
+        self.apply_styles()
+        self.load_categories()
+        self.connect_to_server_auto()
 
-def connect():
-    global client_socket, connected
-    try:
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((CONFIG["server_ip"], CONFIG["server_port"]))
-        client_socket.sendall(b"sender")
-        connected = True
-        return "Подключено"
-    except Exception as e:
-        connected = False
-        return f"Ошибка подключения: {e}"
+    def apply_styles(self):
+        self.setStyleSheet(STYLE_SHEET)
 
+    def init_ui(self):
+        layout = QVBoxLayout(self)
 
-def send_message(text):
-    if connected:
-        client_socket.sendall((text + "\n").encode("utf-8"))
+        # Табовый виджет
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
 
+        # Вкладка РП
+        self.tab_rp = QWidget()
+        self.tabs.addTab(self.tab_rp, "РП Отыгровки")
 
-def ui(page: ft.Page):
-    page.title = "RP Отправитель"
-    page.theme_mode = ft.ThemeMode.LIGHT
-    page.padding = 10
-    page.bgcolor = ft.colors.WHITE
+        rp_layout = QHBoxLayout(self.tab_rp)
 
-    log_console = ft.Text("Журнал", size=12)
-    category_column = ft.Column(auto_scroll=True)
-    subcategory_column = ft.Column(auto_scroll=True)
-    subsubcategory_column = ft.Column(auto_scroll=True)
-    phrases_column = ft.Column(auto_scroll=True)
+        # Списки
+        self.list_categories = QListWidget()
+        self.list_subcategories = QListWidget()
+        self.list_subsubcategories = QListWidget()
+        self.list_phrases = QListWidget()
 
-    def refresh_subcategories(cat):
-        subcategory_column.controls.clear()
-        for sub in PHRASES[cat]:
-            btn = ft.TextButton(text=sub, on_click=lambda e, s=sub: refresh_subsubcategories(cat, s))
-            subcategory_column.controls.append(btn)
-        page.update()
+        self.list_categories.setMaximumWidth(180)
+        self.list_subcategories.setMaximumWidth(180)
+        self.list_subsubcategories.setMaximumWidth(180)
 
-    def refresh_subsubcategories(cat, sub):
-        subsubcategory_column.controls.clear()
-        subcat = PHRASES[cat][sub]
-        if isinstance(subcat, dict):
-            for subsub in subcat:
-                btn = ft.TextButton(text=subsub, on_click=lambda e, s=subsub: show_phrases(cat, sub, s))
-                subsubcategory_column.controls.append(btn)
+        rp_layout.addWidget(self.list_categories)
+        rp_layout.addWidget(self.list_subcategories)
+        rp_layout.addWidget(self.list_subsubcategories)
+        rp_layout.addWidget(self.list_phrases)
+
+        self.list_categories.currentItemChanged.connect(self.on_category_selected)
+        self.list_subcategories.currentItemChanged.connect(self.on_subcategory_selected)
+        self.list_subsubcategories.currentItemChanged.connect(self.on_subsubcategory_selected)
+        self.list_phrases.itemDoubleClicked.connect(self.on_phrase_double_clicked)
+
+        # Вкладка Настройки
+        self.tab_settings = QWidget()
+        self.tabs.addTab(self.tab_settings, "Настройки")
+
+        settings_layout = QFormLayout(self.tab_settings)
+
+        self.input_org = QLineEdit(self.config.get("org", ""))
+        self.input_rang = QLineEdit(self.config.get("rang", ""))
+        self.input_name = QLineEdit(self.config.get("name", ""))
+        self.combo_case = QComboBox()
+        for k, v in CASE_OPTIONS.items():
+            self.combo_case.addItem(v, k)
+        case_idx = list(CASE_OPTIONS.keys()).index(self.config.get("case", "nominative"))
+        self.combo_case.setCurrentIndex(case_idx)
+
+        settings_layout.addRow("Организация:", self.input_org)
+        settings_layout.addRow("Звание/Ранг:", self.input_rang)
+        settings_layout.addRow("Имя:", self.input_name)
+        settings_layout.addRow("Падеж:", self.combo_case)
+
+        self.btn_save_settings = QPushButton("Сохранить настройки")
+        self.btn_save_settings.clicked.connect(self.save_settings)
+        settings_layout.addRow(self.btn_save_settings)
+
+        # Вкладка Сервер
+        self.tab_server = QWidget()
+        self.tabs.addTab(self.tab_server, "Сервер")
+
+        server_layout = QVBoxLayout(self.tab_server)
+
+        form_server = QFormLayout()
+        self.input_ip = QLineEdit(self.config.get("server_ip", ""))
+        self.input_port = QLineEdit(str(self.config.get("server_port", 12345)))
+        form_server.addRow("IP сервера:", self.input_ip)
+        form_server.addRow("Порт сервера:", self.input_port)
+        server_layout.addLayout(form_server)
+
+        self.btn_connect = QPushButton("Подключиться")
+        self.btn_connect.clicked.connect(self.connect_to_server_manual)
+        server_layout.addWidget(self.btn_connect)
+
+        self.label_status = QLabel("Статус: Отключено")
+        server_layout.addWidget(self.label_status)
+
+        self.log_console = QTextEdit()
+        self.log_console.setReadOnly(True)
+        server_layout.addWidget(self.log_console)
+
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+    def log(self, text):
+        self.log_console.append(text)
+        print(text)
+
+    def load_categories(self):
+        self.list_categories.clear()
+        if not self.phrases:
+            return
+        for cat in sorted(self.phrases.keys()):
+            item = QListWidgetItem(cat)
+            self.list_categories.addItem(item)
+
+        self.list_subcategories.clear()
+        self.list_subsubcategories.clear()
+        self.list_phrases.clear()
+
+    def on_category_selected(self, current, previous=None):
+        self.list_subcategories.clear()
+        self.list_subsubcategories.clear()
+        self.list_phrases.clear()
+        if not current:
+            return
+        cat = current.text()
+        subcats = self.phrases.get(cat, {})
+        if isinstance(subcats, dict):
+            for subcat in sorted(subcats.keys()):
+                # Проверяем, что подкатегория не содержит строки, а словарь с фразами
+                if isinstance(subcats[subcat], dict) or isinstance(subcats[subcat], list):
+                    item = QListWidgetItem(subcat)
+                    self.list_subcategories.addItem(item)
         else:
-            show_phrases(cat, sub)
-        page.update()
+            # Если нет подкатегорий, возможно сразу список фраз
+            if isinstance(subcats, list):
+                self.fill_phrases(subcats)
 
-    def show_phrases(cat, sub, subsub=None):
-        phrases_column.controls.clear()
-        data = PHRASES[cat][sub][subsub] if subsub else PHRASES[cat][sub]
+    def on_subcategory_selected(self, current, previous=None):
+        self.list_subsubcategories.clear()
+        self.list_phrases.clear()
+        if not current:
+            return
+        cat = self.list_categories.currentItem()
+        if not cat:
+            return
+        cat = cat.text()
+        subcat = current.text()
+
+        data = self.phrases.get(cat, {}).get(subcat, {})
+        if isinstance(data, dict):
+            for key in sorted(data.keys()):
+                # Пропускаем метаданные типа prefix/suffix
+                if key.lower() in ["prefix", "suffix"]:
+                    continue
+                # Если это список фраз
+                if isinstance(data[key], list):
+                    item = QListWidgetItem(key)
+                    self.list_subsubcategories.addItem(item)
+        elif isinstance(data, list):
+            # Это список фраз без под-подкатегорий
+            self.fill_phrases(data)
+
+    def on_subsubcategory_selected(self, current, previous=None):
+        self.list_phrases.clear()
+        if not current:
+            return
+        cat = self.list_categories.currentItem()
+        subcat = self.list_subcategories.currentItem()
+        if not cat or not subcat:
+            return
+        cat = cat.text()
+        subcat = subcat.text()
+        subsubcat = current.text()
+
+        data = self.phrases.get(cat, {}).get(subcat, {}).get(subsubcat, [])
         if isinstance(data, list):
-            for phrase in data:
-                btn = ft.TextButton(text=phrase, on_click=lambda e, p=phrase, s=sub: send_and_log(p, s))
-                phrases_column.controls.append(btn)
-        elif isinstance(data, dict):
-            for k in data:
-                for phrase in data[k]:
-                    btn = ft.TextButton(text=phrase, on_click=lambda e, p=phrase, s=k: send_and_log(p, s))
-                    phrases_column.controls.append(btn)
-        page.update()
+            self.fill_phrases(data)
 
-    def send_and_log(text, category):
-        formatted = apply_format(text, category)
-        send_message(formatted)
-        log_console.value += f"\nОтправлено: {formatted}"
-        page.update()
+    def fill_phrases(self, phrases):
+        self.list_phrases.clear()
+        for phrase in phrases:
+            item = QListWidgetItem(phrase)
+            self.list_phrases.addItem(item)
 
-    def open_settings():
-        def save(e):
-            CONFIG["org"] = org_input.value
-            CONFIG["rang"] = rang_input.value
-            CONFIG["name"] = name_input.value
-            CONFIG["server_ip"] = ip_input.value
-            CONFIG["server_port"] = int(port_input.value)
-            CONFIG_PATH.write_text(json.dumps(CONFIG, ensure_ascii=False, indent=2))
-            dlg.open = False
-            page.update()
+    @Slot(QListWidgetItem)
+    def on_phrase_double_clicked(self, item):
+        text = item.text()
+        # Подставляем переменные из настроек
+        text = apply_case(text, self.config)
+        self.send_text(text)
 
-        org_input = ft.TextField(label="Организация", value=CONFIG["org"])
-        rang_input = ft.TextField(label="Звание", value=CONFIG["rang"])
-        name_input = ft.TextField(label="Имя", value=CONFIG["name"])
-        ip_input = ft.TextField(label="IP сервера", value=CONFIG["server_ip"])
-        port_input = ft.TextField(label="Порт", value=str(CONFIG["server_port"]))
+    def send_text(self, text):
+        if not self.connected or not self.socket:
+            QMessageBox.warning(self, "Ошибка", "Не подключено к серверу.")
+            return
+        try:
+            self.socket.sendall(text.encode("utf-8"))
+            self.log(f"Отправлено: {text}")
+        except Exception as e:
+            self.log(f"Ошибка отправки: {e}")
 
-        dlg = ft.AlertDialog(
-            modal=True,
-            title=ft.Text("Настройки"),
-            content=ft.Column([org_input, rang_input, name_input, ip_input, port_input]),
-            actions=[ft.TextButton("Сохранить", on_click=save)]
-        )
-        page.dialog = dlg
-        dlg.open = True
-        page.update()
+    def connect_to_server_auto(self):
+        ip = self.config.get("server_ip", "")
+        port = self.config.get("server_port", 0)
+        if ip and port:
+            threading.Thread(target=self.connect_to_server, args=(ip, port), daemon=True).start()
 
-    conn_status = connect()
-    page.add(
-        ft.Row([
-            ft.Column([ft.Text("Категории"), category_column]),
-            ft.Column([ft.Text("Подкатегории"), subcategory_column]),
-            ft.Column([ft.Text("Действия"), subsubcategory_column]),
-            ft.Column([ft.Text("Фразы"), phrases_column]),
-        ], scroll="auto"),
-        ft.Row([
-            ft.Text(conn_status),
-            ft.ElevatedButton("Настройки", on_click=lambda e: open_settings())
-        ]),
-        log_console
-    )
+    def connect_to_server_manual(self):
+        ip = self.input_ip.text().strip()
+        try:
+            port = int(self.input_port.text().strip())
+        except:
+            QMessageBox.warning(self, "Ошибка", "Неверный порт.")
+            return
+        threading.Thread(target=self.connect_to_server, args=(ip, port), daemon=True).start()
 
-    for cat in PHRASES:
-        category_column.controls.append(ft.TextButton(text=cat, on_click=lambda e, c=cat: refresh_subcategories(c)))
-    page.update()
+    def connect_to_server(self, ip, port):
+        if self.connected:
+            self.log("Уже подключены.")
+            return
+        try:
+            self.log(f"Подключение к {ip}:{port} ...")
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.connect((ip, port))
+            # Отправляем тип клиента
+            self.socket.sendall(b"sender\n")
+            self.connected = True
+            self.label_status.setText(f"Статус: Подключено к {ip}:{port}")
+            self.log("Подключено.")
 
-ft.app(target=ui)
+            self.receive_thread = threading.Thread(target=self.receive_messages, daemon=True)
+            self.receive_thread.start()
+        except Exception as e:
+            self.log(f"Ошибка подключения: {e}")
+            self.label_status.setText("Статус: Ошибка подключения")
+
+    def receive_messages(self):
+        try:
+            while self.connected:
+                data = self.socket.recv(4096)
+                if not data:
+                    break
+                msg = data.decode("utf-8").strip()
+                self.log(f"Получено: {msg}")
+        except Exception as e:
+            self.log(f"Ошибка приёма: {e}")
+        finally:
+            self.connected = False
+            self.socket.close()
+            self.label_status.setText("Статус: Отключено")
+            self.log("Отключено от сервера.")
+
+    def save_settings(self):
+        self.config["org"] = self.input_org.text().strip()
+        self.config["rang"] = self.input_rang.text().strip()
+        self.config["name"] = self.input_name.text().strip()
+        self.config["case"] = self.combo_case.currentData()
+        self.config["server_ip"] = self.input_ip.text().strip()
+        try:
+            self.config["server_port"] = int(self.input_port.text().strip())
+        except:
+            QMessageBox.warning(self, "Ошибка", "Порт должен быть числом.")
+            return
+        save_json(CONFIG_PATH, self.config)
+        QMessageBox.information(self, "Сохранено", "Настройки сохранены.")
+
+    def on_tab_changed(self, index):
+        # При смене вкладки сбрасываем доступ к серверу (отключаемся)
+        if self.connected and self.tabs.widget(index) != self.tab_server:
+            self.disconnect_from_server()
+
+    def disconnect_from_server(self):
+        if self.connected and self.socket:
+            self.connected = False
+            try:
+                self.socket.shutdown(socket.SHUT_RDWR)
+                self.socket.close()
+            except:
+                pass
+            self.label_status.setText("Статус: Отключено")
+            self.log("Отключено от сервера.")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    client = RPClient()
+    client.show()
+    sys.exit(app.exec())
