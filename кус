@@ -12,13 +12,13 @@ from PySide6.QtCore import Qt
 
 CONFIG_PATH = Path("rp_config.json")
 FORMATS_PATH = "formats.json"
-PHRASES_PATH = "phrases.json"
+PHRASES_PATH = "rp_phrases.json"
 
 DEFAULT_CONFIG = {
     "org": "Полиция",
     "rang": "Офицер",
     "name": "Анна",
-    "server_ip": "127.0.0.1",
+    "server_ip": "109.73.204.176",
     "server_port": 12345
 }
 
@@ -35,10 +35,11 @@ class RPClient(QWidget):
         self.load_phrases()
 
         self.sock = None
+        self.connected = False
         self.flat_subcat_map = {}
 
         self.init_ui()
-        self.connect_to_server()
+        # Соединение не делаем при старте — ждем пока пользователь нажмет кнопку
 
     def load_config(self):
         if not CONFIG_PATH.exists():
@@ -136,7 +137,6 @@ class RPClient(QWidget):
         name_layout.addWidget(self.name_edit)
         main_layout_main.addLayout(name_layout)
 
-        # Добавим небольшой stretch
         main_layout_main.addStretch()
 
         # --- Вкладка Настройки сервера ---
@@ -145,42 +145,35 @@ class RPClient(QWidget):
         main_layout_server.setContentsMargins(10, 10, 10, 10)
         main_layout_server.setSpacing(15)
 
-        # Инструкция по доступу
         self.access_label = QLabel("Введите код доступа для изменения настроек сервера:")
         self.access_label.setWordWrap(True)
         main_layout_server.addWidget(self.access_label)
 
-        # Поле для ввода кода доступа
         self.access_code_edit = QLineEdit()
         self.access_code_edit.setEchoMode(QLineEdit.Password)
         self.access_code_edit.setPlaceholderText("Код доступа")
         self.access_code_edit.textChanged.connect(self.check_access_code)
         main_layout_server.addWidget(self.access_code_edit)
 
-        # Контейнер с настройками сервера, скрыт по умолчанию
         self.server_settings_container = QWidget()
         server_settings_layout = QVBoxLayout(self.server_settings_container)
         server_settings_layout.setContentsMargins(0, 0, 0, 0)
         server_settings_layout.setSpacing(12)
 
-        # IP сервера
         server_ip_layout = QHBoxLayout()
         server_ip_label = QLabel("IP сервера:")
         server_ip_label.setFixedWidth(90)
         self.server_ip_edit = QLineEdit()
         self.server_ip_edit.setText(self.config.get("server_ip", DEFAULT_CONFIG["server_ip"]))
-        self.server_ip_edit.textChanged.connect(lambda v: self.on_setting_changed("server_ip", v))
         server_ip_layout.addWidget(server_ip_label)
         server_ip_layout.addWidget(self.server_ip_edit)
         server_settings_layout.addLayout(server_ip_layout)
 
-        # Порт сервера
         server_port_layout = QHBoxLayout()
         server_port_label = QLabel("Порт сервера:")
         server_port_label.setFixedWidth(90)
         self.server_port_edit = QLineEdit()
         self.server_port_edit.setText(str(self.config.get("server_port", DEFAULT_CONFIG["server_port"])))
-        self.server_port_edit.textChanged.connect(lambda v: self.on_setting_changed("server_port", v))
         server_port_layout.addWidget(server_port_label)
         server_port_layout.addWidget(self.server_port_edit)
         server_settings_layout.addLayout(server_port_layout)
@@ -188,7 +181,16 @@ class RPClient(QWidget):
         main_layout_server.addWidget(self.server_settings_container)
         self.server_settings_container.setVisible(False)
 
-        # --- Основной рабочий UI с фразами ---
+        # Кнопка подключения
+        self.connect_button = QPushButton("Подключиться")
+        self.connect_button.clicked.connect(self.on_connect_clicked)
+        main_layout_server.addWidget(self.connect_button)
+
+        # Статус подключения
+        self.status_label = QLabel("Статус: Не подключено")
+        main_layout_server.addWidget(self.status_label)
+
+        # --- Основной UI с фразами ---
         self.phrases_tab = QWidget()
         phrases_layout = QVBoxLayout(self.phrases_tab)
         phrases_layout.setContentsMargins(10, 10, 10, 10)
@@ -197,18 +199,15 @@ class RPClient(QWidget):
         lists_layout = QHBoxLayout()
         lists_layout.setSpacing(10)
 
-        # Категории
         self.cat_list = QListWidget()
         self.cat_list.addItems(self.phrases.keys())
         self.cat_list.currentItemChanged.connect(self.on_category_changed)
         lists_layout.addWidget(self.create_group_widget("Категории", self.cat_list), 1)
 
-        # Подкатегории / подподкатегории
         self.subcat_list = QListWidget()
         self.subcat_list.currentItemChanged.connect(self.on_subcategory_changed)
         lists_layout.addWidget(self.create_group_widget("Подкатегории / Подподкатегории", self.subcat_list), 1)
 
-        # Фразы
         self.phrase_list = QListWidget()
         self.phrase_list.itemDoubleClicked.connect(self.on_phrase_double_clicked)
         lists_layout.addWidget(self.create_group_widget("Фразы (двойной клик для отправки)", self.phrase_list), 2)
@@ -219,7 +218,8 @@ class RPClient(QWidget):
         self.tabs.addTab(self.tab_main, "Настройки")
         self.tabs.addTab(self.tab_server, "Сервер")
 
-        # Загрузить первую категорию
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
         if self.phrases:
             self.cat_list.setCurrentRow(0)
             first_cat = list(self.phrases.keys())[0]
@@ -270,6 +270,18 @@ class RPClient(QWidget):
             QLabel {
                 color: #555555;
             }
+            QPushButton {
+                background-color: #1976d2;
+                color: white;
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-weight: 600;
+                font-size: 14px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #1565c0;
+            }
         """)
 
     def check_access_code(self, text):
@@ -281,6 +293,43 @@ class RPClient(QWidget):
             self.server_settings_container.setVisible(False)
             self.access_label.setText("Введите код доступа для изменения настроек сервера:")
 
+    def on_connect_clicked(self):
+        ip = self.server_ip_edit.text().strip()
+        port_text = self.server_port_edit.text().strip()
+        try:
+            port = int(port_text)
+        except:
+            QMessageBox.warning(self, "Ошибка", "Порт должен быть числом")
+            return
+
+        self.config["server_ip"] = ip
+        self.config["server_port"] = port
+        self.save_config()
+
+        # Закрываем предыдущее соединение, если есть
+        if self.sock:
+            try:
+                self.sock.close()
+            except:
+                pass
+            self.sock = None
+            self.connected = False
+
+        # Пытаемся подключиться
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.sock.settimeout(5)
+            self.sock.connect((ip, port))
+            self.sock.settimeout(None)
+            self.connected = True
+            self.status_label.setText(f"Статус: Подключено к {ip}:{port}")
+            self.sock.sendall(b"CLIENT_WITH_UI\n")
+            threading.Thread(target=self.receive_loop, daemon=True).start()
+        except Exception as e:
+            self.status_label.setText(f"Статус: Ошибка подключения - {e}")
+            self.connected = False
+            self.sock = None
+
     def on_setting_changed(self, key, value):
         if key == "server_port":
             try:
@@ -289,23 +338,17 @@ class RPClient(QWidget):
                 return
         self.config[key] = value
         self.save_config()
-        print(f"[INFO] Настройка {key} изменена: {value}")
+        if key in ("org", "rang", "name"):
+            # обновим список фраз с подстановкой, если надо
+            pass
 
-        # При изменении ip/порта переподключаемся к серверу
-        if key in ("server_ip", "server_port"):
-            if self.sock:
-                try:
-                    self.sock.close()
-                except:
-                    pass
-                self.sock = None
-            self.connect_to_server()
-
-    def on_category_changed(self, current, previous):
-        if current:
-            cat = current.text()
-            self.load_subcategories(cat)
-            self.phrase_list.clear()
+    def on_tab_changed(self, index):
+        # При смене вкладки если уходим с Серверной вкладки — сбрасываем доступ
+        if self.tabs.widget(index) != self.tab_server:
+            self.access_code_edit.setEnabled(True)
+            self.access_code_edit.clear()
+            self.server_settings_container.setVisible(False)
+            self.access_label.setText("Введите код доступа для изменения настроек сервера:")
 
     def load_subcategories(self, category):
         self.subcat_list.clear()
@@ -329,6 +372,16 @@ class RPClient(QWidget):
 
         subcats = self.phrases.get(category, {})
         recurse_subcats(subcats)
+
+    def on_category_changed(self, current, previous):
+        self.phrase_list.clear()
+        if not current:
+            return
+        category = current.text()
+        self.load_subcategories(category)
+        # Автовыбор первой подкатегории
+        if self.subcat_list.count() > 0:
+            self.subcat_list.setCurrentRow(0)
 
     def on_subcategory_changed(self, current, previous):
         self.phrase_list.clear()
@@ -379,28 +432,18 @@ class RPClient(QWidget):
             text = text.replace("{" + key + "}", str(val))
         return text
 
-    def connect_to_server(self):
-        try:
-            if self.sock:
-                self.sock.close()
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.connect((self.config["server_ip"], self.config["server_port"]))
-            print(f"[INFO] Подключено к серверу {self.config['server_ip']}:{self.config['server_port']}")
-            self.sock.sendall(b"CLIENT_WITH_UI\n")
-            threading.Thread(target=self.receive_loop, daemon=True).start()
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка подключения", str(e))
-
     def send_to_server(self, message: str):
-        if self.sock:
+        if self.sock and self.connected:
             try:
                 self.sock.sendall((message + "\n").encode("utf-8"))
             except Exception as e:
                 print("[ERROR] Ошибка отправки сообщения:", e)
+        else:
+            print("[WARN] Не подключено к серверу.")
 
     def receive_loop(self):
         try:
-            while True:
+            while self.connected:
                 data = self.sock.recv(1024)
                 if not data:
                     break
@@ -408,6 +451,10 @@ class RPClient(QWidget):
                 print("[RECV]", msg)
         except Exception as e:
             print("[ERROR] Ошибка приема:", e)
+        finally:
+            self.connected = False
+            self.status_label.setText("Статус: Отключено от сервера")
+            self.sock = None
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
