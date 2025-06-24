@@ -6,19 +6,22 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QLabel, QTabWidget, QListWidget, QListWidgetItem,
-    QComboBox, QLineEdit, QGroupBox, QFormLayout, QMessageBox
+    QComboBox, QLineEdit, QGroupBox, QFormLayout, QMessageBox,
+    QSizePolicy
 )
 from PySide6.QtCore import Qt, Slot
 
+
 CONFIG_PATH = Path("rp_config.json")
 PHRASES_PATH = Path("rp_phrases.json")
+FORMATS_PATH = Path("formats.json")
 
 
 class RPClient(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RP Client - Отправка реплик")
-        self.resize(1000, 700)
+        self.resize(1100, 700)
 
         self.socket = None
         self.receive_thread = None
@@ -33,34 +36,12 @@ class RPClient(QWidget):
             "server_port": 12345,
             "declension": "nominative"
         })
-        self.phrases = self.load_json(PHRASES_PATH, default={
-            "Общие": {
-                "Приветствия": {
-                    "Фразы": [
-                        "Здравствуйте, я {name} из {org}, {rang}.",
-                        "Добрый день, {name} на связи.",
-                    ]
-                },
-                "Прощания": {
-                    "Фразы": [
-                        "Всего доброго!",
-                        "Спасибо за внимание, удачи!",
-                    ]
-                }
-            },
-            "Рабочие": {
-                "Проверка документов": {
-                    "Фразы": [
-                        "Покажите, пожалуйста, документы.",
-                        "Прошу предъявить удостоверение личности.",
-                    ]
-                }
-            }
-        })
+        self.phrases = self.load_json(PHRASES_PATH, default={})
+        self.formats = self.load_json(FORMATS_PATH, default={})
 
         self.init_ui()
         self.populate_settings()
-        self.populate_phrases()
+        self.populate_categories()
         self.connect_to_server_auto()
 
     def load_json(self, path: Path, default=None):
@@ -162,17 +143,17 @@ class RPClient(QWidget):
         self.tabs = QTabWidget()
         main_layout.addWidget(self.tabs)
 
-        # Таб с репликами: 3 колонки
+        # Вкладка Реплики с 4 колонками
         self.tab_phrases = QWidget()
         self.tabs.addTab(self.tab_phrases, "Реплики")
         self.create_phrases_tab()
 
-        # Настройки
+        # Вкладка Настройки
         self.tab_settings = QWidget()
         self.tabs.addTab(self.tab_settings, "Настройки")
         self.create_settings_tab()
 
-        # Сервер
+        # Вкладка Сервер
         self.tab_server = QWidget()
         self.tabs.addTab(self.tab_server, "Сервер")
         self.create_server_tab()
@@ -182,20 +163,44 @@ class RPClient(QWidget):
     def create_phrases_tab(self):
         layout = QHBoxLayout(self.tab_phrases)
 
-        # 3 колонки: Категории, Подкатегории, Фразы
+        # 4 QListWidget для 4 колонок
         self.list_categories = QListWidget()
-        self.list_categories.setMaximumWidth(250)
-        self.list_subcategories = QListWidget()
-        self.list_subcategories.setMaximumWidth(250)
-        self.list_phrases = QListWidget()
-
+        self.list_categories.setMaximumWidth(200)
+        self.list_categories.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.list_categories.setSelectionMode(QListWidget.SingleSelection)
         layout.addWidget(self.list_categories)
-        layout.addWidget(self.list_subcategories)
+
+        self.list_subcategories1 = QListWidget()
+        self.list_subcategories1.setMaximumWidth(200)
+        self.list_subcategories1.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.list_subcategories1.setSelectionMode(QListWidget.SingleSelection)
+        layout.addWidget(self.list_subcategories1)
+
+        self.list_subcategories2 = QListWidget()
+        self.list_subcategories2.setMaximumWidth(200)
+        self.list_subcategories2.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self.list_subcategories2.setSelectionMode(QListWidget.SingleSelection)
+        layout.addWidget(self.list_subcategories2)
+
+        self.list_phrases = QListWidget()
+        self.list_phrases.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self.list_phrases)
 
-        # Связи сигналов
-        self.list_categories.currentItemChanged.connect(self.on_category_selected)
-        self.list_subcategories.currentItemChanged.connect(self.on_subcategory_selected)
+        # Лог сообщений под колонками
+        log_layout = QVBoxLayout()
+        main_v_layout = QVBoxLayout()
+        main_v_layout.addLayout(layout)
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setMaximumHeight(140)
+        main_v_layout.addWidget(self.log_text)
+
+        self.tab_phrases.setLayout(main_v_layout)
+
+        # Связываем выборы
+        self.list_categories.itemClicked.connect(self.on_category_selected)
+        self.list_subcategories1.itemClicked.connect(self.on_subcategory1_selected)
+        self.list_subcategories2.itemClicked.connect(self.on_subcategory2_selected)
         self.list_phrases.itemDoubleClicked.connect(self.on_phrase_double_clicked)
 
     def create_settings_tab(self):
@@ -296,6 +301,7 @@ class RPClient(QWidget):
             self.btn_connect.setEnabled(True)
 
     def log(self, message: str):
+        self.log_text.append(message)
         self.log_server.append(message)
 
     def populate_settings(self):
@@ -401,51 +407,104 @@ class RPClient(QWidget):
             self.label_status.setText("Статус: Отключено")
             self.log("Отключено от сервера.")
 
-    def populate_phrases(self):
+    def populate_categories(self):
+        # Заполняем первую колонку категориями
         self.list_categories.clear()
-        self.list_subcategories.clear()
-        self.list_phrases.clear()
+        cats = sorted(self.phrases.keys())
+        self.list_categories.addItems(cats)
 
-        for cat_name in self.phrases.keys():
-            self.list_categories.addItem(cat_name)
+        self.list_subcategories1.clear()
+        self.list_subcategories2.clear()
+        self.list_phrases.clear()
 
     @Slot()
-    def on_category_selected(self, current, previous):
-        self.list_subcategories.clear()
+    def on_category_selected(self, item: QListWidgetItem):
+        cat = item.text()
+        self.list_subcategories1.clear()
+        self.list_subcategories2.clear()
         self.list_phrases.clear()
-        if current is None:
-            return
-        cat_name = current.text()
-        subcats = self.phrases.get(cat_name, {})
-        if isinstance(subcats, dict):
-            for subcat_name in subcats.keys():
-                self.list_subcategories.addItem(subcat_name)
+
+        subcats = []
+        data_cat = self.phrases.get(cat, {})
+        if isinstance(data_cat, dict):
+            subcats = sorted(data_cat.keys())
+        self.list_subcategories1.addItems(subcats)
 
     @Slot()
-    def on_subcategory_selected(self, current, previous):
-        self.list_phrases.clear()
-        if current is None:
-            return
+    def on_subcategory1_selected(self, item: QListWidgetItem):
         cat_item = self.list_categories.currentItem()
-        if cat_item is None:
+        if not cat_item:
             return
-        cat_name = cat_item.text()
-        subcat_name = current.text()
-        subcat_data = self.phrases.get(cat_name, {}).get(subcat_name, {})
-        if isinstance(subcat_data, dict):
-            phrases = subcat_data.get("Фразы", [])
-            for phrase in phrases:
-                self.list_phrases.addItem(phrase)
+        cat = cat_item.text()
+        subcat1 = item.text()
+
+        self.list_subcategories2.clear()
+        self.list_phrases.clear()
+
+        data_subcat = self.phrases.get(cat, {}).get(subcat1, {})
+        if isinstance(data_subcat, dict):
+            subsubcats = sorted(k for k in data_subcat.keys() if k != "Фразы")
+            self.list_subcategories2.addItems(subsubcats)
+
+            # Если есть "Фразы" на этом уровне, сразу покажем их
+            if "Фразы" in data_subcat and isinstance(data_subcat["Фразы"], list):
+                self.list_phrases.addItems(data_subcat["Фразы"])
+        elif isinstance(data_subcat, list):
+            self.list_phrases.addItems(data_subcat)
 
     @Slot()
-    def on_phrase_double_clicked(self, item):
-        text = item.text()
+    def on_subcategory2_selected(self, item: QListWidgetItem):
+        cat_item = self.list_categories.currentItem()
+        subcat1_item = self.list_subcategories1.currentItem()
+        if not cat_item or not subcat1_item:
+            return
+        cat = cat_item.text()
+        subcat1 = subcat1_item.text()
+        subcat2 = item.text()
+
+        self.list_phrases.clear()
+
+        data_subsubcat = self.phrases.get(cat, {}).get(subcat1, {}).get(subcat2, {})
+        if isinstance(data_subsubcat, dict):
+            # если словарь с ключом "Фразы"
+            if "Фразы" in data_subsubcat and isinstance(data_subsubcat["Фразы"], list):
+                self.list_phrases.addItems(data_subsubcat["Фразы"])
+        elif isinstance(data_subsubcat, list):
+            self.list_phrases.addItems(data_subsubcat)
+
+    @Slot()
+    def on_phrase_double_clicked(self, item: QListWidgetItem):
+        phrase = item.text()
+
+        cat_item = self.list_categories.currentItem()
+        subcat1_item = self.list_subcategories1.currentItem()
+        subcat2_item = self.list_subcategories2.currentItem()
+
+        cat = cat_item.text() if cat_item else None
+        subcat1 = subcat1_item.text() if subcat1_item else None
+        subcat2 = subcat2_item.text() if subcat2_item else None
+
+        prefix = ""
+        suffix = ""
+
+        # Поиск формата
+        fmt_level = self.formats.get(cat, {})
+        if subcat1:
+            fmt_level = fmt_level.get(subcat1, {})
+        if subcat2:
+            fmt_level = fmt_level.get(subcat2, {})
+
+        prefix = fmt_level.get("prefix", "")
+        suffix = fmt_level.get("suffix", "")
+
+        # Подстановка переменных
         org = self.config.get("org", "Полиция")
         rang = self.config.get("rang", "Офицер")
         name = self.config.get("name", "Анна")
-        decl = self.config.get("declension", "nominative")
-        # Пока просто замена, падежи не реализованы
+
+        text = f"{prefix}{phrase}{suffix}"
         text = text.replace("{org}", org).replace("{rang}", rang).replace("{name}", name)
+
         self.send_message(text)
 
     def send_message(self, text: str):
