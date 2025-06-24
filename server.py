@@ -2,7 +2,7 @@ import socket
 import threading
 
 HOST = "0.0.0.0"
-PORT = 12345
+PORT = 12346
 
 clients_receivers = []
 clients_senders = []
@@ -23,7 +23,7 @@ def handle_client(conn, addr):
                 data = conn.recv(1024)
                 if not data:
                     break
-                # Можно реализовать heartbeat или команды для receiver, если нужно
+                # Здесь можно обработать данные от приемника, если нужно
         elif client_type == "sender":
             with lock:
                 clients_senders.append(conn)
@@ -62,6 +62,7 @@ def handle_client(conn, addr):
 def start_server():
     print(f"[Сервер] Запуск на {HOST}:{PORT}")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Ключевая строка для переиспользования порта
         s.bind((HOST, PORT))
         s.listen()
         while True:
